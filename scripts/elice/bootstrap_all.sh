@@ -56,9 +56,10 @@ done
 wait
 cd "$REPO"
 
-echo "=== [4/6] manifest + RIR 뱅크 ==="
+echo "=== [4/6] manifest + RIR 뱅크 + 데이터셋 QA ==="
 python scripts/data/prepare_noise_pool.py
 [ -f data/rir_bank/duct_rirs_v1.npz ] || python scripts/data/build_rir_bank.py --n 300
+python scripts/data/validate_noise_pool.py   # 학습·추론 적합성 리포트 (치명 시 중단)
 
 echo "=== [5/6] 검증 (pytest) ==="
 python -m pytest -q
