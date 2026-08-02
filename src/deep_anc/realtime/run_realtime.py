@@ -29,9 +29,9 @@ from ..audio_io import (
     pcm_int32_to_float32,
     resolve_alsa_portaudio_device,
 )
-from ..config import apply_overrides, load_runtime_config
+from ..config import DEFAULT_HANDOFF_SAMPLES, load_runtime_config
 from ..dsp.filters import DCBlocker
-from .engines import build_engine
+from .engines import build_engine, secondary_path_npz
 from .noise_gen import NoiseProgram
 from .ring_buffer import SPSCRing
 from .safety import FadeGate, PowerEMA, SafetySupervisor
@@ -388,8 +388,10 @@ def run_calibrate(cfg: dict) -> int:
         return 1
     corr = sp_signal.fftconvolve(err, ctrl[::-1], mode="full")
     lag = int(np.argmax(np.abs(corr))) - (ctrl.size - 1)
-    sp = load_secondary_path(cfg["secondary_path"])
-    handoff = int(cfg["duct"]["secondary_path"].get("handoff_extra_samples", 256))
+    sp = load_secondary_path(secondary_path_npz(cfg))
+    handoff = int(
+        cfg["duct"]["secondary_path"].get("handoff_extra_samples", DEFAULT_HANDOFF_SAMPLES)
+    )
     # rec['control'] 은 블록이 실제 "출력"되는 콜백 시점(핸드오프 이후)에 기록되므로,
     # 측정 lag 의 기대값은 캘리브레이션 지연(1342)뿐이다 — 핸드오프는 별도 합산 (#11)
     expected = sp.delay_samples

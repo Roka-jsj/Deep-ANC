@@ -33,20 +33,14 @@
 
 ```bash
 # ── Jetson (이 저장소가 있는 곳) ──────────────────────────────
-python3 -m venv --without-pip --system-site-packages .venv    # 상세: docs/06
+bash scripts/jetson/setup_jetson.sh           # venv + NVIDIA torch wheel + preload 훅 (상세: docs/06)
 source .venv/bin/activate
-pip install -r requirements-jetson.txt && pip install -e .
-# torch 는 NVIDIA Jetson wheel 로 별도 설치 (docs/06_deployment_jetson.md)
-
 pytest                                        # 검증 (30+ 테스트)
 python scripts/data/build_rir_bank.py         # 덕트 RIR 뱅크 생성
 
-# ── Elice Cloud (2×A100, VSCode CUDA 12.8) ──────────────────
-git clone <이 저장소>
-bash scripts/elice/setup_env.sh
-bash scripts/data/download_noise.sh && python scripts/data/prepare_noise_pool.py
-python scripts/data/build_rir_bank.py
-bash scripts/elice/run_pretrain.sh            # GPU 수 자동 감지 (DDP)
+# ── Elice Cloud (2×A100) — 원샷 부트스트랩 ───────────────────
+git clone https://github.com/Roka-jsj/Deep-ANC.git && bash Deep-ANC/scripts/elice/bootstrap_all.sh
+#   (환경 + 데이터셋 병렬 다운로드 + QA + 테스트 + GPU0=base/GPU1=tiny 병렬 학습까지 자동)
 
 # ── 학습 결과 → Jetson 배포 ─────────────────────────────────
 python scripts/train/export_onnx.py --ckpt runs/pretrain_base/ckpt/best.pt --out runs/export/model.onnx

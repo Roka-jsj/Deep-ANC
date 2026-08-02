@@ -27,12 +27,15 @@ def band_weights(
     sample_rate: int,
     scheme: str,
     cutoff_hz: float = 1633.0,
+    target_band_hz: tuple[float, float] = (80.0, 1000.0),
 ) -> torch.Tensor:
-    """rfft 빈별 가중 벡터."""
+    """rfft 빈별 가중 벡터. 목표 대역은 duct.yaml acoustics.realistic_target_band_hz
+    가 단일 출처다 (감사 L9 — trainer 가 주입)."""
     freqs = torch.fft.rfftfreq(fft_size) * sample_rate
     w = torch.ones_like(freqs)
+    lo, hi = float(target_band_hz[0]), float(target_band_hz[1])
     if scheme == "curriculum_a":
-        w = torch.where((freqs >= 80.0) & (freqs <= 1000.0), torch.full_like(w, 3.0), w)
+        w = torch.where((freqs >= lo) & (freqs <= hi), torch.full_like(w, 3.0), w)
         w = torch.where(freqs > cutoff_hz, torch.full_like(w, 0.25), w)
         w = torch.where(freqs < 40.0, torch.full_like(w, 0.1), w)
     elif scheme == "fullband":
@@ -64,6 +67,7 @@ class ANCLoss(nn.Module):
         sample_rate: int,
         nonlinear: RandomNonlinear | None = None,
         cutoff_hz: float = 1633.0,
+        target_band_hz: tuple[float, float] = (80.0, 1000.0),
     ) -> None:
         super().__init__()
         self.plant = plant
@@ -78,7 +82,7 @@ class ANCLoss(nn.Module):
         for fft_size in self.ffts:
             self.register_buffer(
                 f"w_{fft_size}",
-                band_weights(fft_size, sample_rate, scheme, cutoff_hz),
+                band_weights(fft_size, sample_rate, scheme, cutoff_hz, target_band_hz),
                 persistent=False,
             )
             self.register_buffer(

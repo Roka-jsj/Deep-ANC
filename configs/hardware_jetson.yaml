@@ -4,17 +4,17 @@
 audio:
   sample_rate: 48000
   block_size: 256               # 콜백 블록 (5.33ms). 캘리브레이션과 동일해야 지연 모델이 맞는다
-  latency: low
+  latency: low                  # 정보용(코드는 'low' 고정 — run_realtime/record_duct)
   input:
     card: APE                   # /proc/asound/cards 의 짧은 ID
     pcm: 1
-    channels: 2
-    dtype: int32
+    channels: 2                 # 정보용(코드는 2ch 고정)
+    dtype: int32                # 정보용(코드는 int32 고정)
   output:
     card: Audio                 # AB13X USB Audio
     pcm: 0
-    channels: 2
-    dtype: int16
+    channels: 2                 # 정보용(코드는 2ch 고정)
+    dtype: int16                # 정보용(코드는 int16 고정)
 
 channels:
   error_mic: 0                  # INMP441, L/R -> GND

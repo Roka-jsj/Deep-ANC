@@ -48,10 +48,15 @@ def main() -> int:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
+    from deep_anc.config import DEFAULT_HANDOFF_SAMPLES
+
     fs = int(data_cfg["sample_rate"])
     sp = load_secondary_path(REPO_ROOT / duct_cfg["secondary_path"]["npz"])
     plant = DifferentiableSecondaryPath(
-        sp, handoff_extra_samples=int(duct_cfg["secondary_path"].get("handoff_extra_samples", 0))
+        sp,
+        handoff_extra_samples=int(
+            duct_cfg["secondary_path"].get("handoff_extra_samples", DEFAULT_HANDOFF_SAMPLES)
+        ),
     ).to(device)
 
     ds = SynthANCDataset(data_cfg, duct_cfg, split="test", seed=999)

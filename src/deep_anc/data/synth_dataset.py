@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
-from ..config import default_d_noise_delay, duct_distance_samples
+from ..config import _resolve_path, default_d_noise_delay, duct_distance_samples
 from ..dsp.duct_sim import build_rir_bank
 from ..dsp.filters import fft_filter
 from ..dsp.secondary_path import load_secondary_path
@@ -64,17 +64,19 @@ class SynthANCDataset(IterableDataset):
             raise ValueError(f"reference_mode: {self.reference_mode}")
 
         # RIR 뱅크: 파일이 있으면 로드, 없으면 소규모 즉석 생성 (스모크 테스트용)
+        # 경로는 저장소 루트 기준으로 해석 — 실행 위치(CWD)에 의존하지 않는다 (감사 M2)
         if rir_bank is not None:
             self.rirs = rir_bank
         else:
             bank_path = data_cfg.get("rir_bank")
             try:
-                with np.load(bank_path) as z:
+                with np.load(_resolve_path(bank_path)) as z:
                     self.rirs = {k: z[k] for k in ("p_ref", "p_err", "f_fb")}
             except (TypeError, FileNotFoundError, OSError):
                 print(
-                    f"[synth_dataset] RIR 뱅크({bank_path})가 없어 즉석 생성(32개)합니다 — "
-                    "본 학습 전에는 scripts/data/build_rir_bank.py 를 실행하세요."
+                    "=" * 70 + f"\n[synth_dataset 경고] RIR 뱅크({bank_path})가 없어 즉석 32개로 "
+                    "대체합니다.\n  본 학습에서는 도메인 랜덤화가 크게 약해집니다 — 반드시 "
+                    "scripts/data/build_rir_bank.py 를 먼저 실행하세요.\n" + "=" * 70
                 )
                 self.rirs = build_rir_bank(duct_cfg, self.fs, n_variants=32, seed=self.seed)
 
@@ -95,19 +97,20 @@ class SynthANCDataset(IterableDataset):
         # manifest(data/manifests/<tag>.jsonl)가 없는 태그는 합성원으로 자동 폴백하므로,
         # 데이터셋을 나중에 추가해도 설정 변경 없이 활성화된다 (speech/music 등).
         self.mix_ratio = dict(data_cfg.get("source_mix_ratio", {"synthetic": 1.0}))
-        manifest_dir = data_cfg.get("noise_manifest_dir")
+        manifest_dir = _resolve_path(data_cfg.get("noise_manifest_dir", "data/manifests"))
         self.pools: dict[str, list] = {
-            tag: [f"{manifest_dir}/{tag}.jsonl"]
+            tag: [str(manifest_dir / f"{tag}.jsonl")]
             for tag, ratio in self.mix_ratio.items()
             if tag != "synthetic" and float(ratio) > 0.0
         }
         self._pool_objs: dict[str, NoisePool] = {}
+        self.dc_hum_prob = float(data_cfg.get("dc_hum_prob", 0.0))
 
         # digital-ref 1차경로 순수지연.
         # 규약: d_noise_delay_samples(실측/기본값)는 "디지털 출력→에러마이크 총 순수지연"이다.
         # p_err RIR(영상법)에는 음향 전파 온셋 t_ac(NS→ERR)가 이미 포함되어 있으므로,
         # RIR 과 결합할 때는 전기/버퍼 성분만 추가한다 — 이중 계상 방지 (리뷰 확정 결함 #1).
-        sp = load_secondary_path(duct_cfg["secondary_path"]["npz"])
+        sp = load_secondary_path(_resolve_path(duct_cfg["secondary_path"]["npz"]))
         d_noise = duct_cfg.get("digital_reference", {}).get("d_noise_delay_samples")
         if d_noise is None:
             d_noise = default_d_noise_delay(duct_cfg, self.fs, sp.delay_samples)
@@ -178,6 +181,19 @@ class SynthANCDataset(IterableDataset):
             p_sig = float(np.mean(sig**2) + 1e-12)
             p_noise = p_sig / (10.0 ** (snr_db / 10.0))
             sig += rng.standard_normal(sig.size).astype(np.float32) * np.sqrt(p_noise)
+
+        # 전원 험(50/60Hz + 2차 고조파) — 배포 환경의 DC/저역 험 모사 (런타임은 DCBlocker 보유)
+        if self.dc_hum_prob > 0.0 and rng.random() < self.dc_hum_prob:
+            f_hum = float(rng.choice([50.0, 60.0]))
+            t = np.arange(self.segment) / self.fs
+            rms_ref = float(np.sqrt(np.mean(x_ref**2)) + 1e-9)
+            amp = rms_ref * (10.0 ** (float(rng.uniform(-35.0, -20.0)) / 20.0))
+            hum = amp * (
+                np.sin(2 * np.pi * f_hum * t + rng.uniform(0, 2 * np.pi))
+                + 0.4 * np.sin(2 * np.pi * 2 * f_hum * t + rng.uniform(0, 2 * np.pi))
+            ).astype(np.float32)
+            x_ref += hum
+            err_in += hum
 
         # 채널 dropout — ref-only / err-only 운용 대비 (동시 제거는 금지)
         u = rng.random()

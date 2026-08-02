@@ -58,12 +58,19 @@ def main() -> int:
     parser.add_argument("--out", default="results/compare_fxlms.md")
     args = parser.parse_args()
 
+    from deep_anc.config import DEFAULT_HANDOFF_SAMPLES
+
     duct_cfg = load_yaml(args.duct_config)
     eval_cfg = load_yaml(args.eval_config)
-    fs = 48000
+    data_cfg = load_yaml("configs/data_sim.yaml")
+    fs = int(data_cfg["sample_rate"])
+    fb_range = data_cfg.get("closed_loop", {}).get("feedback_delay_samples", [512, 1024])
+    fb_delay = (int(fb_range[0]) + int(fb_range[1])) // 2
 
     sp = load_secondary_path(REPO_ROOT / duct_cfg["secondary_path"]["npz"])
-    handoff = int(duct_cfg["secondary_path"].get("handoff_extra_samples", 0))
+    handoff = int(
+        duct_cfg["secondary_path"].get("handoff_extra_samples", DEFAULT_HANDOFF_SAMPLES)
+    )
     device = "cuda" if torch.cuda.is_available() else "cpu"
     plant = DifferentiableSecondaryPath(sp, handoff_extra_samples=handoff).to(device)
 
@@ -88,9 +95,9 @@ def main() -> int:
         # FxLMS: 실기와 동일하게 핸드오프 없는 in-callback 지연으로 구동
         fx = run_fxlms_offline(x_ref, d, sp.fir, sp.delay_samples)
 
-        # DL: 학습과 동일한 핸드오프 포함 플랜트
+        # DL: 학습과 동일한 핸드오프 포함 플랜트, 피드백 지연은 학습 범위 중앙값
         with torch.no_grad():
-            err_in = torch.from_numpy(_delay_np(d, 768)).view(1, 1, -1)
+            err_in = torch.from_numpy(_delay_np(d, fb_delay)).view(1, 1, -1)
             x = torch.cat([torch.from_numpy(x_ref).view(1, 1, -1), err_in], dim=1).to(device)
             y = model(x)
             e_dl = (torch.from_numpy(d).view(1, 1, -1).to(device) + plant(y.float(), {"jitter": 0}))

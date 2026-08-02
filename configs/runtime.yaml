@@ -10,13 +10,12 @@ controller: dl                  # dl | fxlms
 
 engine:
   type: torch                   # torch | ort | trt  (개발→검증→배포 순 마이그레이션)
-  ckpt: runs/pretrain_base/ckpt/best.pt        # torch 엔진용
+  ckpt: runs/pretrain_base/ckpt/best.pt        # torch 엔진용 (모델 구조는 ckpt 내장 cfg 사용)
   onnx: runs/export/model.onnx                 # ort 엔진용
   plan: runs/export/model_fp16.plan            # trt 엔진용
-  model_config: configs/model_base.yaml
   cpu_affinity: [4, 5, 6, 7]    # 추론 스레드 CPU 소프트 고정
 
-secondary_path: assets/measured/secondary_path_4s.npz
+# S(z) npz 는 duct.yaml secondary_path.npz 가 단일 출처 (여기 중복 정의 금지 — 감사 M9)
 
 fxlms:                          # controller=fxlms 또는 DL 폴백용
   control_length: 256

@@ -52,8 +52,8 @@ D_noise 는 `scripts/data/calibrate_wideband.py --output-channel noise` 로 실�
 상쇄음이 에러 마이크에 도달할 때까지:
 
 ```
-필요 예측 지평 P = S경로 지연(1342+256) − t_ac(REF→ERR 선행분)
-              ≈ 1598 − 147 ≈ 1451샘플 ≈ 30ms
+필요 예측 지평 P = S경로 지연(1342+256) − t_ac(REF→ERR 선행분 1.0m ≈ 140샘플)
+              ≈ 1598 − 140 ≈ 1458샘플 ≈ 30ms
 ```
 
 **30ms 뒤의 소음을 미리 알아야** 상쇄할 수 있다. 따라서:

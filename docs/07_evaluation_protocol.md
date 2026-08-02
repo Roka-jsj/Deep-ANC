@@ -21,7 +21,7 @@
 | S2 `multitone` | 120+300+750Hz | 다중 협대역 |
 | S3 `band` | 80–1000Hz 대역잡음 | digital-ref 광대역 능력 |
 | S4 `nonlinear` | 210Hz+3·5차 고조파+소프트클립 | **DL 비선형 우위 입증 (핵심)** |
-| S5 `file` | 실측 소음 WAV 루프 | 실전 데모 |
+| S5 `file` | 실측 소음 WAV 루프 | 실전 데모 — eval.yaml 미등록: 실행 시 `--set noise.type=file --set noise.file=<wav>` 로 run_realtime 에 직접 지정 |
 
 ## 3. 오프라인 평가 (하드웨어 불필요)
 

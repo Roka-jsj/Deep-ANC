@@ -1,12 +1,13 @@
-# HybridANCNet-base — Jetson 기본 배포 모델 (≈6.0M params, 2.25 GMAC/s @48kHz)
+# HybridANCNet-base — TRT FP16 배포 목표 모델 (≈6.0M params, 2.25 GMAC/s @48kHz)
+# 실측: ORT CPU P99 6.8ms(예산 초과) → TensorRT 필요. 현행 실시간은 tiny 사용.
 # 시간영역 인과 회귀: Conv-TasNet 인코더/디코더 + WaveNet dilated causal TCN
 #                    + GCRN GLU/GLSTM + windowed causal MHSA 1층
 
 name: hybrid_anc_base
-sample_rate: 48000
 hop: 128                        # 프레임 hop (2.67ms), 런타임 블록 256 = 2프레임 언롤
 win: 384                        # 인코더 룩백 창 (8ms), 룩어헤드 0
 in_channels: 2                  # [x_ref, x_err] — err-only/ref-only는 채널 dropout 증강으로 대응
+io_scale: 0.02                  # 입출력 정규화 스케일 (마이크 실측 RMS 기준 — 갱신 시 재학습 필요)
 
 encoder:
   channels: 256                 # GLU 통과 후 채널 (conv out은 2배)

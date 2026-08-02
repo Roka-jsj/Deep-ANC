@@ -56,7 +56,12 @@ def main() -> int:
 
     eval_cfg = load_yaml(REPO_ROOT / args.eval_config)
     scenarios = {s["name"]: s for s in eval_cfg["scenarios"]}
-    chosen = args.scenarios or list(scenarios.keys())
+    chosen = []
+    for name in args.scenarios or list(scenarios.keys()):
+        if name in scenarios:
+            chosen.append(name)
+        else:
+            print(f"[skip] 알 수 없는 시나리오 '{name}' — eval.yaml scenarios: {list(scenarios)}")
     protocol = eval_cfg.get("protocol", {})
     bands = eval_cfg.get("octave_bands_hz", [125, 250, 500, 1000, 2000, 4000, 8000])
     trusted = tuple(eval_cfg.get("trusted_band_hz", [150, 600]))
@@ -88,13 +93,17 @@ def main() -> int:
                 f"{s.get('underruns', 0)} | {s.get('xruns', 0)} |"
             )
             # 원시 세션 저장
-            sess_dir = REPO_ROOT / "results" / f"session_{stamp}"
+            report_root = REPO_ROOT / eval_cfg.get("report_dir", "results")
+            sess_dir = report_root / f"session_{stamp}"
             sess_dir.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(
                 sess_dir / f"{name}_{controller}.npz", fs=result["fs"], **result["data"]
             )
 
-    out = Path(args.out) if args.out else REPO_ROOT / "results" / f"eval_report_{stamp}.md"
+    out = (
+        Path(args.out) if args.out
+        else REPO_ROOT / eval_cfg.get("report_dir", "results") / f"eval_report_{stamp}.md"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n리포트 저장: {out}")

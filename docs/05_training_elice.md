@@ -17,11 +17,19 @@
 ## 2. 초기 셋업 (웹 VS Code 터미널)
 
 ```bash
-git clone https://github.com/<계정>/Deep_ANC.git && cd Deep_ANC
+# 원샷 (권장): 환경+데이터+QA+테스트+2-GPU 병렬 학습까지 자동
+git clone https://github.com/Roka-jsj/Deep-ANC.git && bash Deep-ANC/scripts/elice/bootstrap_all.sh
+```
+
+수동 단계 (부트스트랩 내부 동작과 동일):
+
+```bash
+git clone https://github.com/Roka-jsj/Deep-ANC.git && cd Deep-ANC
 bash scripts/elice/setup_env.sh          # venv + requirements-train.txt + pip -e .
-bash scripts/data/download_noise.sh 2    # DNS 2샤드(~12GB) + ESC-50. 샤드 수 조절 가능
+bash scripts/data/download_noise.sh 2    # DNS 2샤드(각 5.4GB) + ESC-50 — Azure 는 느리면 scripts/elice/pget.py 사용
 python scripts/data/prepare_noise_pool.py
 python scripts/data/build_rir_bank.py --n 300
+python scripts/data/validate_noise_pool.py   # 데이터셋 QA 리포트
 pytest -q                                # 30+ 테스트로 환경 검증
 ```
 

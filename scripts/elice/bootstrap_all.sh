@@ -12,8 +12,10 @@ set -euo pipefail
 
 REPO=~/Deep-ANC
 cd "$REPO"
+git pull -q origin main || true          # 최신 코드 반영 (기존 clone 재사용 시)
 PGET="python3 $REPO/scripts/elice/pget.py"
 DNS_BASE="https://dns4public.blob.core.windows.net/dns4archive/datasets_fullband"
+ZEN="https://zenodo.org/records"
 
 echo "=== [1/6] 환경 (venv + torch cu121 + 패키지) ==="
 if [ ! -f .venv/bin/python ]; then
@@ -44,9 +46,35 @@ if [ ! -d esc50/ESC-50-master ]; then
     && unzip -q esc50.zip -d esc50 && rm esc50.zip ) &
   pids+=($!)
 fi
+# 음악: FMA-small (44.1k mp3 — soundfile/libsndfile 이 직접 디코딩, 로더가 48k 리샘플)
+if [ ! -d music/fma_small ]; then
+  ( $PGET "https://os.unil.cloud.switch.ch/fma/fma_small.zip" fma_small.zip 8 \
+    && mkdir -p music && unzip -q fma_small.zip -d music && rm fma_small.zip ) &
+  pids+=($!)
+fi
+# 지속성 실환경 (DEMAND 48k, 6환경: 주방/세탁기/사무실/복도/지하철/차량)
+if [ ! -d demand ]; then
+  ( mkdir -p demand && cd demand && \
+    for e in DKITCHEN DWASHING OOFFICE OHALLWAY TMETRO TCAR; do
+      wget -q -O "${e}_48k.zip" "$ZEN/1227121/files/${e}_48k.zip?download=1" \
+        && unzip -q "${e}_48k.zip" && rm "${e}_48k.zip"
+    done ) &
+  pids+=($!)
+fi
+# 기계소음: MIMII DG fan (16kHz ⚠ 저역 전용 — QA 리포트에 표기됨)
+if [ ! -d machine ]; then
+  ( $PGET "$ZEN/6529888/files/fan.zip?download=1" mimii_fan.zip 8 \
+    && mkdir -p machine && unzip -q mimii_fan.zip -d machine && rm mimii_fan.zip ) &
+  pids+=($!)
+fi
 for p in "${pids[@]:-}"; do wait "$p"; done
 
-echo "=== [3/6] 샤드 해제 ==="
+echo "=== [3/6] 샤드 무결성 검사 + 해제 ==="
+for f in "${!DEST[@]}"; do
+  if [ -f "$f" ]; then
+    bzip2 -t "$f" || { echo "[오류] $f 손상 — 재다운로드 필요"; rm -f "$f.done"; exit 1; }
+  fi
+done
 for f in "${!DEST[@]}"; do
   if [ -f "$f" ]; then
     d="${DEST[$f]}"; mkdir -p "$d"

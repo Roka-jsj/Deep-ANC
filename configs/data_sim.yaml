@@ -5,18 +5,20 @@ segment_seconds: 1.5
 
 # 레퍼런스 모드 [교차검증 C2 — 두 모드의 지연 물리가 다르다]
 #   digital : 소음원을 Jetson이 생성 → 출력버퍼 지연이 소음/상쇄 양경로에 공통 → 광대역 상쇄 가능
-#   acoustic: 외부 소음을 레퍼런스 마이크로 수음 → P≈25ms 예측 필요 → 주기성/협대역 한정
+#   acoustic: 외부 소음을 레퍼런스 마이크로 수음 → P≈30ms 예측 필요 → 주기성/협대역 한정
 reference_mode: digital
 
 # 소음원 구성 비율 — 키 이름 = data/manifests/<키>.jsonl 태그 (manifest 없으면 합성원 폴백)
 # quiet zone 목표: 소음뿐 아니라 대화(음성)·음악까지 소스 분포에 포함 (digital-ref 는
 # 광대역 비정상 신호도 인과적 상쇄 가능 — docs/01 §3)
 source_mix_ratio:
-  synthetic: 0.30               # synthetic_signals.py: 톤+고조파, AM/FM 기계음, 협대역, 처프
+  synthetic: 0.25               # synthetic_signals.py: 톤+고조파, AM/FM 기계음, 협대역, 처프
   dns_fullband: 0.30            # DNS-Challenge noise_fullband (48kHz 실환경 소음)
   speech: 0.15                  # DNS-Challenge clean_fullband read_speech (48kHz 음성)
-  music: 0.15                   # 음악 (48/44.1kHz — 데이터 준비 전까지 합성원 폴백)
-  esc50: 0.10                   # ESC-50 (비정상 환경음 — 강건화용 소량) [교차검증 L1]
+  music: 0.10                   # FMA-small (44.1kHz mp3 → 리샘플)
+  demand: 0.08                  # DEMAND 48k (주방/세탁기/사무실/지하철 등 지속성 실환경)
+  machine: 0.07                 # MIMII DG fan (16kHz ⚠ 저역 기계음 전용 — 덕트 제어대역 <1.6kHz 커버)
+  esc50: 0.05                   # ESC-50 (비정상 환경음 — 강건화용 소량) [교차검증 L1]
 
 noise_manifest_dir: data/manifests
 rir_bank: data/rir_bank/duct_rirs_v1.npz
@@ -37,13 +39,10 @@ plant_perturbation:             # S(z) coherence 0.40 대응 도메인 랜덤화
   gain_db: [-3, 3]
   allpass_perturb: true
 
-closed_loop:                    # Stage-2 폐루프 학습 전용
+closed_loop:                    # Stage-2 폐루프 학습 전용 (chunk = hop × unroll_group_frames)
   feedback_delay_samples: [512, 1024]   # err 피드백 지연 랜덤화 [교차검증 H3]
-  chunk_seconds: 1.0
-  warmup_seconds: 0.25          # 손실 제외 구간
+  warmup_seconds: 0.25          # 손실 제외 구간 (플랜트 적용 후 절단)
   unroll_group_frames: 4        # 파이썬 루프 횟수 절감 [교차검증 H1]
 
-split:                          # 누수 방지: 원본 파일 단위 분할
-  train: 0.90
-  val: 0.05
-  test: 0.05
+# 분할 비율 참고(코드 내 고정): 노이즈풀 90/5/5(prepare_noise_pool.py),
+# RIR 변형 90/5/5(synth_dataset.py), 실측 세션 80/10/10(make_recorded_manifest.py)

@@ -18,7 +18,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
-from ..config import REPO_ROOT
+from ..config import DEFAULT_HANDOFF_SAMPLES, REPO_ROOT
 from ..data.recorded_dataset import RecordedANCDataset
 from ..data.synth_dataset import SynthANCDataset, make_eval_batch
 from ..dsp.nonlinear import RandomNonlinear
@@ -92,10 +92,17 @@ class Trainer:
         # ----- 플랜트 + 손실 -----
         duct = cfg["duct"]
         sp = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
+        if sp.sample_rate != self.fs:
+            raise ValueError(
+                f"S(z) npz 샘플레이트 {sp.sample_rate} ≠ 데이터 {self.fs} — "
+                "duct.yaml secondary_path.npz 를 확인하세요 (감사 M7)"
+            )
         pp = cfg["data"].get("plant_perturbation", {})
         plant = DifferentiableSecondaryPath(
             sp,
-            handoff_extra_samples=int(duct["secondary_path"].get("handoff_extra_samples", 0)),
+            handoff_extra_samples=int(
+                duct["secondary_path"].get("handoff_extra_samples", DEFAULT_HANDOFF_SAMPLES)
+            ),
             delay_jitter_range=tuple(pp.get("delay_jitter_range", [0, 0])),
             gain_db_range=tuple(pp.get("gain_db", [0.0, 0.0])),
             tilt_db_per_octave_range=tuple(pp.get("gain_tilt_db_per_octave", [0.0, 0.0])),
@@ -109,12 +116,43 @@ class Trainer:
             hardclip_prob=float(nl_cfg.get("hardclip_prob", 0.0)),
             seed=seed + 29,
         )
-        cutoff = float(duct.get("acoustics", {}).get("plane_wave_cutoff_hz", 1633.0))
+        acoustics = duct.get("acoustics", {})
+        cutoff = float(acoustics.get("plane_wave_cutoff_hz", 1633.0))
+        target_band = tuple(acoustics.get("realistic_target_band_hz", [80.0, 1000.0]))
         self.criterion = ANCLoss(
-            plant, cfg["loss"], self.fs, nonlinear=nonlinear, cutoff_hz=cutoff
+            plant, cfg["loss"], self.fs, nonlinear=nonlinear,
+            cutoff_hz=cutoff, target_band_hz=target_band,
         ).to(self.device)
 
+        # 헤드룸 정합: 손실 클립 마진 < 모델 소프트리미터 한계 (감사 L8)
+        raw_model = self.model.module if hasattr(self.model, "module") else self.model
+        clip_margin = float(cfg["loss"].get("clip_margin", 0.18))
+        if clip_margin >= raw_model.limit:
+            raise ValueError(
+                f"loss.clip_margin({clip_margin}) 은 모델 limiter.limit({raw_model.limit}) "
+                "보다 작아야 합니다"
+            )
+
         # ----- 데이터 -----
+        # 비-synthetic 태그의 manifest 존재를 명시 검사 — 조용한 합성 폴백으로
+        # 학습 분포가 바뀌는 사고 방지 (감사 M1). 부재 태그는 배너로 알린다.
+        if self.is_main:
+            mix = cfg["data"].get("source_mix_ratio", {})
+            mdir = Path(cfg["data"].get("noise_manifest_dir", "data/manifests"))
+            if not mdir.is_absolute():
+                mdir = REPO_ROOT / mdir
+            missing = [
+                t for t, r in mix.items()
+                if t != "synthetic" and float(r) > 0 and not (mdir / f"{t}.jsonl").exists()
+            ]
+            if missing:
+                total_missing = sum(float(mix[t]) for t in missing)
+                print("=" * 70)
+                print(f"[trainer 경고] manifest 부재 태그 {missing} (비율 합 {total_missing:.0%})")
+                print("  → 해당 비율은 합성원으로 대체됩니다. 의도가 아니면 학습을 중단하고")
+                print("    scripts/data/prepare_noise_pool.py 를 실행하세요.")
+                print("=" * 70)
+
         synth_train = SynthANCDataset(cfg["data"], duct, split="train", seed=seed)
         loader = DataLoader(
             synth_train,
@@ -146,6 +184,9 @@ class Trainer:
 
         # ----- 옵티마이저/스케줄 -----
         opt_cfg = cfg["optimizer"]
+        opt_name = str(opt_cfg.get("name", "adamw")).lower()
+        if opt_name != "adamw":
+            raise ValueError(f"지원하지 않는 optimizer.name: {opt_name} (adamw 만 구현됨)")
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=float(opt_cfg["lr"]),

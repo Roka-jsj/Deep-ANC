@@ -2,12 +2,12 @@
 # 값을 바꾸면 RIR 뱅크(build_rir_bank.py)를 다시 생성해야 시뮬레이션에 반영된다.
 
 duct:
-  shape: rectangular            # 사각 아크릴(PMMA), 벽두께 10mm
-  wall_thickness_m: 0.010
-  total_length_m: 1.200         # 외형 전장
-  interior_length_m: 1.190      # 좌측 폐단 내측면 ~ 개구
+  shape: rectangular            # 문서용(코드 미소비) — 사각 아크릴(PMMA)
+  wall_thickness_m: 0.010       # 문서용(코드 미소비)
+  total_length_m: 1.200         # 문서용(코드 미소비) — 외형 전장
+  interior_length_m: 1.190      # 좌측 폐단 내측면 ~ 개구 (duct_sim 소비)
   cross_section_m: [0.105, 0.105]
-  boundary: closed_open         # 좌 폐단(소음스피커 면) - 우 개방단
+  boundary: closed_open         # 문서용(코드 미소비) — 시뮬은 closed–open 고정 구현
   speed_of_sound_mps: 343.0
   end_correction_factor: 0.61   # 개방단 보정 Δ = 0.61 · r_eq
 
@@ -28,12 +28,12 @@ reflection:                     # 1D 영상법 시뮬 파라미터 (실측 후 �
   open_end: -0.45               # 개방단 반사(위상 반전) 저역 추정
   per_reflection_lowpass_hz: 4000.0
 
-secondary_path:
+secondary_path:                 # 학습·런타임·평가가 공용하는 단일 정의 (이중 정의 금지 — 감사 M9)
   npz: assets/measured/secondary_path_4s.npz  # delay=1342샘플, FIR 2048탭, fit 2.14dB, coherence 0.40
   # 3-스레드 런타임은 캘리브레이션(콜백 내 즉시 출력) 경로보다 1 hop 늦게 출력한다.
   # 학습 플랜트 지연 = delay_samples + handoff_extra_samples  [설계 교차검증 C1]
+  # (지연 지터 증강 범위는 data_sim.yaml plant_perturbation.delay_jitter_range 가 단일 출처)
   handoff_extra_samples: 256
-  delay_jitter_range: [0, 512]  # 학습 증강용 비대칭 지터 (핸드오프 2 hop까지 커버)
 
 digital_reference:
   # digital-ref 모드의 1차경로 순수지연(소음 ch0 출력 → 에러마이크 도달까지의 "총" 지연).
@@ -42,5 +42,4 @@ digital_reference:
   # RIR 과 결합할 때 t_ac 를 자동으로 빼고 전기/버퍼 성분만 적용한다 (이중 계상 방지).
   d_noise_delay_samples: null
 
-calibration:
-  input_ref_rms: 0.02           # 입력 정규화 기준 RMS (record_duct.py 세션에서 갱신)
+# 입출력 정규화 스케일은 모델 설정(model_*.yaml io_scale)이 단일 출처다 (감사 M8)

@@ -15,6 +15,11 @@ import yaml
 # 저장소 루트 (src/deep_anc/config.py 기준 두 단계 위)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# 3-스레드 런타임의 콜백↔추론 핸드오프(1 hop) — 학습 플랜트 지연에 가산되는 기본값.
+# duct.yaml secondary_path.handoff_extra_samples 가 명시되면 그 값을 쓰고,
+# 모든 소비처(.get 기본값)는 이 상수를 공유한다 (감사 L10 — 기본값 분기 금지).
+DEFAULT_HANDOFF_SAMPLES = 256
+
 
 def _resolve_path(path: str | Path) -> Path:
     """상대 경로는 저장소 루트 기준으로 해석한다 (실행 위치와 무관하게 동작)."""

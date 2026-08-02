@@ -55,7 +55,7 @@ GCRN / Transformer / WaveNet / Conv-TasNet 네 구조에서 실시간 ANC 에 �
 | `st_i_attn_m` | [1,1,1,64] | KV 슬롯 유효성 마스크 (빈 슬롯 −1e4) — 워밍업 구간도 오프라인과 등가 |
 | `st_dec` | [1,1,256] | 디코더 OLA 꼬리 |
 
-스트리밍=오프라인 등가성: max err ≤ 3e-8 (tests). GLSTM 은 학습 시 cuDNN nn.LSTM,
+스트리밍=오프라인 등가성: 실측 max err ~3e-8 (테스트 게이트 1e-5). GLSTM 은 학습 시 cuDNN nn.LSTM,
 스트리밍/export 시 동일 가중치의 수동 셀 — 등가성 테스트 포함 (설계 H1).
 
 ## 5. 학습 손실 (`losses/anc_loss.py`)

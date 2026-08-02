@@ -1,10 +1,11 @@
-# HybridANCNet-tiny — 안전 폴백 / block 128 운용 (≈1.2M params, 0.43 GMAC/s)
+# HybridANCNet-tiny — 현행 실시간 기본 모델 (≈1.2M params, 0.43 GMAC/s)
+# 실측: ORT CPU P99 1.50ms — TensorRT 없이 실시간 게이트(P99<3ms) 통과.
 
 name: hybrid_anc_tiny
-sample_rate: 48000
 hop: 128
 win: 384
 in_channels: 2
+io_scale: 0.02                  # 입출력 정규화 스케일 (base 와 동일 유지)
 
 encoder:
   channels: 128

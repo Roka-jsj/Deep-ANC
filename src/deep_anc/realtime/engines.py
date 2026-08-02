@@ -219,12 +219,19 @@ class FxLMSEngine:
         return y
 
 
+def secondary_path_npz(runtime_cfg: dict) -> str:
+    """S(z) npz 경로 — duct.yaml secondary_path.npz 가 단일 출처 (감사 M9)."""
+    from ..config import _resolve_path
+
+    return str(_resolve_path(runtime_cfg["duct"]["secondary_path"]["npz"]))
+
+
 def build_engine(runtime_cfg: dict) -> InferenceEngine:
     """runtime.yaml 로 엔진 구성. controller=fxlms 면 FxLMSEngine."""
     hop = int(runtime_cfg.get("hop", 256))
     if runtime_cfg.get("controller", "dl") == "fxlms":
         return FxLMSEngine(
-            runtime_cfg["secondary_path"], runtime_cfg.get("fxlms", {}), hop=hop
+            secondary_path_npz(runtime_cfg), runtime_cfg.get("fxlms", {}), hop=hop
         )
     eng = runtime_cfg.get("engine", {})
     kind = str(eng.get("type", "torch"))

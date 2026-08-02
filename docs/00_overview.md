@@ -39,7 +39,7 @@
 | 단계 | 모드 | 목표 | 근거 |
 |---|---|---|---|
 | **1단계 (현재)** | digital-ref | 협대역(공진 210/350Hz) → 광대역 80–800Hz 감쇠. FxLMS 대비 비선형 시나리오 우위 입증 | 상쇄 경로가 소음 경로보다 ~3ms 선행 → 광대역도 인과적 가능 |
-| **2단계** | acoustic-ref | 외부(마이크 수음) 소음 중 주기성/준정상 잡음 상쇄 — 진짜 quiet zone 의 시작 | P≈25ms 예측 필요 → LSTM/MHSA 의 주기 학습으로 대응 |
+| **2단계** | acoustic-ref | 외부(마이크 수음) 소음 중 주기성/준정상 잡음 상쇄 — 진짜 quiet zone 의 시작 | P≈30ms 예측 필요 → LSTM/MHSA 의 주기 학습으로 대응 |
 | **3단계** | acoustic-ref 광대역 | I/O 지연 단축(I2S DAC 직결, 96kHz 등 하드웨어 개선) 후 준광대역 확장, 8kHz+ 시도 | 지연이 인과성 예산(2.77ms) 안으로 들어와야 함 |
 
 각 단계는 같은 코드베이스에서 config 변경(`data_sim.yaml reference_mode`,
@@ -67,7 +67,7 @@ Deep_ANC/
 
 ## 검증 상태 (2026-08-02, Jetson 실측)
 
-- pytest 30+ 통과: 인과성(미래 무의존), 스트리밍=오프라인 등가(≤3e-8), GLSTM 이중 경로 등가,
+- pytest 30+ 통과: 인과성(미래 무의존), 스트리밍=오프라인 등가(실측 ~3e-8, 테스트 허용 1e-5), GLSTM 이중 경로 등가,
   덕트 시뮬 공진 70/210/350Hz 재현, 데이터 분할 무누수, S(z) torch=scipy 등가
 - 학습 스모크: open/closed-loop 각각 Jetson GPU에서 정상 (bf16 AMP)
 - ONNX export → ORT 등가성 max err 2.4e-8
