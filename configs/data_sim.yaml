@@ -8,10 +8,14 @@ segment_seconds: 1.5
 #   acoustic: 외부 소음을 레퍼런스 마이크로 수음 → P≈25ms 예측 필요 → 주기성/협대역 한정
 reference_mode: digital
 
-# 소음원 구성 비율 (물리적으로 상쇄 가능한 주기성/준정상 소음이 1차 목표)
+# 소음원 구성 비율 — 키 이름 = data/manifests/<키>.jsonl 태그 (manifest 없으면 합성원 폴백)
+# quiet zone 목표: 소음뿐 아니라 대화(음성)·음악까지 소스 분포에 포함 (digital-ref 는
+# 광대역 비정상 신호도 인과적 상쇄 가능 — docs/01 §3)
 source_mix_ratio:
-  synthetic: 0.45               # synthetic_signals.py: 톤+고조파, AM/FM 기계음, 협대역, 처프
-  dns_fullband: 0.45            # DNS-Challenge noise_fullband (48kHz)
+  synthetic: 0.30               # synthetic_signals.py: 톤+고조파, AM/FM 기계음, 협대역, 처프
+  dns_fullband: 0.30            # DNS-Challenge noise_fullband (48kHz 실환경 소음)
+  speech: 0.15                  # DNS-Challenge clean_fullband read_speech (48kHz 음성)
+  music: 0.15                   # 음악 (48/44.1kHz — 데이터 준비 전까지 합성원 폴백)
   esc50: 0.10                   # ESC-50 (비정상 환경음 — 강건화용 소량) [교차검증 L1]
 
 noise_manifest_dir: data/manifests

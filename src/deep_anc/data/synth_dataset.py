@@ -91,18 +91,16 @@ class SynthANCDataset(IterableDataset):
             "train": idx[n_val + n_test :],
         }[split]
 
-        # 노이즈 풀 (manifest 가 없으면 합성원 100%로 폴백)
+        # 소스 풀 — source_mix_ratio 의 키가 곧 태그다 ('synthetic' 제외).
+        # manifest(data/manifests/<tag>.jsonl)가 없는 태그는 합성원으로 자동 폴백하므로,
+        # 데이터셋을 나중에 추가해도 설정 변경 없이 활성화된다 (speech/music 등).
         self.mix_ratio = dict(data_cfg.get("source_mix_ratio", {"synthetic": 1.0}))
         manifest_dir = data_cfg.get("noise_manifest_dir")
-        self.pools: dict[str, list] = {}
-        for tag in ("dns_fullband", "esc50"):
-            if self.mix_ratio.get(tag, 0.0) <= 0.0:
-                continue
-            manifest = f"{manifest_dir}/{tag}.jsonl"
-            try:
-                self.pools[tag] = [manifest]
-            except Exception:
-                pass
+        self.pools: dict[str, list] = {
+            tag: [f"{manifest_dir}/{tag}.jsonl"]
+            for tag, ratio in self.mix_ratio.items()
+            if tag != "synthetic" and float(ratio) > 0.0
+        }
         self._pool_objs: dict[str, NoisePool] = {}
 
         # digital-ref 1차경로 순수지연.

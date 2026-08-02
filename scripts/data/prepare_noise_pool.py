@@ -29,11 +29,16 @@ def main() -> int:
     root = REPO_ROOT / args.root
     out_dir = REPO_ROOT / args.out
 
-    for tag, subdir in (("dns_fullband", "dns_fullband"), ("esc50", "esc50")):
-        src = root / subdir
-        if not src.exists():
-            print(f"[skip] {src} 없음")
-            continue
+    if not root.exists():
+        print(f"소스 루트 없음: {root}")
+        return 1
+
+    # data/raw/noise/ 아래의 모든 하위 폴더를 태그로 자동 인식 —
+    # 새 데이터셋은 폴더만 추가하면 되고, data_sim.yaml source_mix_ratio 에 같은
+    # 이름의 키를 넣으면 학습에 반영된다 (speech/music 등).
+    subdirs = sorted(p for p in root.iterdir() if p.is_dir())
+    for src in subdirs:
+        tag = src.name
         entries = scan_wavs(src, tag)
         if not entries:
             print(f"[skip] {src} 에 오디오 없음")
