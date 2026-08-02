@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# 데이터/실험 산출물 (용량 — GitHub에 올리지 않음)
+data/
+runs/
+results/
+*.wav
+*.flac
+*.h5
+*.hdf5
+
+# 모델 산출물 (GitHub Release로 배포)
+*.pt
+*.pth
+*.onnx
+*.plan
+*.engine
+
+# 로그/캐시
+*.log
+.tensorboard/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# 편집기/OS
+.vscode/
+.idea/
+.DS_Store
+
+# 예외: 저장소에 포함할 측정 자산
+!assets/measured/*.npz

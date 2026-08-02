@@ -1,0 +1,25 @@
+# Jetson AGX Orin 오디오 하드웨어 맵 — anc_project에서 실기 검증된 값
+# 입력: hw:APE,1 (ADMAIF2), S32_LE 48kHz 스테레오 / 출력: AB13X USB, S16_LE 48kHz 스테레오
+
+audio:
+  sample_rate: 48000
+  block_size: 256               # 콜백 블록 (5.33ms). 캘리브레이션과 동일해야 지연 모델이 맞는다
+  latency: low
+  input:
+    card: APE                   # /proc/asound/cards 의 짧은 ID
+    pcm: 1
+    channels: 2
+    dtype: int32
+  output:
+    card: Audio                 # AB13X USB Audio
+    pcm: 0
+    channels: 2
+    dtype: int16
+
+channels:
+  error_mic: 0                  # INMP441, L/R -> GND
+  reference_mic: 1              # INMP441, L/R -> 3.3V  (⚠ 과거 무신호 이력 — docs/02_hardware_setup.md 점검 절차)
+  noise_out: 0                  # 좌측 소음 스피커
+  cancel_out: 1                 # 우측 상쇄 스피커 (TPA3116D2)
+
+dc_blocker_r: 0.995

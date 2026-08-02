@@ -1,0 +1,9 @@
+# 공통 의존성 (학습/추론 양쪽). torch는 환경별 파일 참조:
+#   - Elice A100 학습: requirements-train.txt
+#   - Jetson 추론:     requirements-jetson.txt
+numpy==1.26.4
+scipy>=1.10
+soundfile>=0.12
+PyYAML>=6.0
+tqdm>=4.66
+matplotlib>=3.7

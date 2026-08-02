@@ -1,0 +1,27 @@
+# HybridANCNet-tiny — 안전 폴백 / block 128 운용 (≈1.2M params, 0.43 GMAC/s)
+
+name: hybrid_anc_tiny
+sample_rate: 48000
+hop: 128
+win: 384
+in_channels: 2
+
+encoder:
+  channels: 128
+
+tcn:
+  repeats: 2
+  dilations: [1, 2, 4, 8]
+  hidden: 256
+  kernel: 3
+
+glstm:
+  groups: 1
+  hidden_per_group: 192
+  insert_after_repeat: 2
+
+attention:
+  enabled: false                # TRT 리스크/연산 절감 — tiny는 MHSA 제거
+
+limiter:
+  limit: 0.2

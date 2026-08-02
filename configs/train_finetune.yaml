@@ -1,0 +1,46 @@
+# Stage-2/3 파인튜닝 — 실측 녹음 혼합 + (선택) closed-loop
+# 실행: python scripts/train/train.py --config configs/train_finetune.yaml
+
+stage: open_loop                # 1차 파인튜닝은 open_loop, 이후 closed_loop 로 변경
+model_config: configs/model_base.yaml
+data_config: configs/data_sim.yaml
+duct_config: configs/duct.yaml
+
+init_ckpt: runs/pretrain_base/ckpt/best.pt
+
+recorded_manifest: data/manifests/recorded_train.jsonl
+recorded_ratio: 0.7             # 실측:합성 = 7:3 혼합 배치
+
+batch_size: 16
+num_workers: 8
+prefetch_factor: 4
+
+optimizer:
+  name: adamw
+  lr: 1.0e-4                    # 사전학습 대비 1/10
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+schedule:
+  warmup_steps: 1000
+  total_steps: 50000            # closed_loop 시 20000~50000 권장 [교차검증 H1]
+  min_lr: 1.0e-6
+
+amp: bf16
+grad_clip: 5.0
+freeze_encoder: false           # 데이터가 적으면 true 시도
+
+loss:
+  mrstft_ffts: [256, 512, 1024, 2048]
+  lambda_mrstft: 1.0
+  lambda_pow: 1.0e-3
+  lambda_clip: 1.0
+  clip_margin: 0.18
+  band_weight: curriculum_a
+
+eval_every: 1000
+log_every: 100
+early_stop_patience: 10
+ckpt_dir: runs/finetune_base
+resume: null
+seed: 20260803

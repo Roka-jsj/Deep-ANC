@@ -1,0 +1,33 @@
+# HybridANCNet-base — Jetson 기본 배포 모델 (≈6.0M params, 2.25 GMAC/s @48kHz)
+# 시간영역 인과 회귀: Conv-TasNet 인코더/디코더 + WaveNet dilated causal TCN
+#                    + GCRN GLU/GLSTM + windowed causal MHSA 1층
+
+name: hybrid_anc_base
+sample_rate: 48000
+hop: 128                        # 프레임 hop (2.67ms), 런타임 블록 256 = 2프레임 언롤
+win: 384                        # 인코더 룩백 창 (8ms), 룩어헤드 0
+in_channels: 2                  # [x_ref, x_err] — err-only/ref-only는 채널 dropout 증강으로 대응
+
+encoder:
+  channels: 256                 # GLU 통과 후 채널 (conv out은 2배)
+
+tcn:
+  repeats: 3
+  dilations: [1, 2, 4, 8, 16]
+  hidden: 512                   # 1x1 확장 채널 (GLU 게이트 포함 시 conv out 2배)
+  kernel: 3
+
+glstm:
+  groups: 2
+  hidden_per_group: 256
+  insert_after_repeat: 2        # TCN 2번째 반복 뒤 삽입
+
+attention:
+  enabled: true
+  heads: 4
+  head_dim: 64
+  window_frames: 64             # KV 캐시 64프레임 = 170ms
+  insert_after_repeat: 3        # TCN 3번째 반복 뒤 삽입
+
+limiter:
+  limit: 0.2                    # 소프트 리미터 0.2·tanh(y/0.2) — 런타임 control_limit와 정합

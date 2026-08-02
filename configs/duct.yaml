@@ -1,0 +1,44 @@
+# 덕트 물리 파라미터 — 근거: docs/09_duct_structure.md (acrylic-duct-structure.md, 2026-08-02 갱신본)
+# 값을 바꾸면 RIR 뱅크(build_rir_bank.py)를 다시 생성해야 시뮬레이션에 반영된다.
+
+duct:
+  shape: rectangular            # 사각 아크릴(PMMA), 벽두께 10mm
+  wall_thickness_m: 0.010
+  total_length_m: 1.200         # 외형 전장
+  interior_length_m: 1.190      # 좌측 폐단 내측면 ~ 개구
+  cross_section_m: [0.105, 0.105]
+  boundary: closed_open         # 좌 폐단(소음스피커 면) - 우 개방단
+  speed_of_sound_mps: 343.0
+  end_correction_factor: 0.61   # 개방단 보정 Δ = 0.61 · r_eq
+
+positions_m:                    # X 좌표 (원점 = 좌측 폐단)
+  noise_speaker: 0.0            # 단면 중앙, 축방향 방사 (외부 부착)
+  reference_mic: 0.100          # 벽면 (부착면 미확정 — 문서 §8)
+  cancel_speaker: 1.050         # 상면 side-branch, Ø40 (마운트 구간 0.990~1.110)
+  error_mic: 1.100              # ⚠ 잠정값 (문서 §5 미확정, CS 마운트 구간과 겹침 이슈 §7) — 확정 시 갱신
+  opening: 1.200
+
+acoustics:                      # 문서 계산값 — tests/test_duct_sim.py 의 기준값
+  plane_wave_cutoff_hz: 1633.0  # f_cut = c / (2·0.105)
+  axial_resonances_hz: [70, 210, 350, 489, 629]   # closed-open, L_eff≈1.226m
+  realistic_target_band_hz: [80, 800]             # 문서의 현실적 목표 대역
+
+reflection:                     # 1D 영상법 시뮬 파라미터 (실측 후 갱신 가능)
+  closed_end: 0.80              # 폐단(스피커 배플) 반사계수 추정
+  open_end: -0.45               # 개방단 반사(위상 반전) 저역 추정
+  per_reflection_lowpass_hz: 4000.0
+
+secondary_path:
+  npz: assets/measured/secondary_path_4s.npz  # delay=1342샘플, FIR 2048탭, fit 2.14dB, coherence 0.40
+  # 3-스레드 런타임은 캘리브레이션(콜백 내 즉시 출력) 경로보다 1 hop 늦게 출력한다.
+  # 학습 플랜트 지연 = delay_samples + handoff_extra_samples  [설계 교차검증 C1]
+  handoff_extra_samples: 256
+  delay_jitter_range: [0, 512]  # 학습 증강용 비대칭 지터 (핸드오프 2 hop까지 커버)
+
+digital_reference:
+  # digital-ref 모드의 1차경로 순수지연(소음 ch0 출력 → 에러마이크).
+  # scripts/data/calibrate_wideband.py --output-channel noise 로 실측 후 기입. [교차검증 C2]
+  d_noise_delay_samples: null
+
+calibration:
+  input_ref_rms: 0.02           # 입력 정규화 기준 RMS (record_duct.py 세션에서 갱신)

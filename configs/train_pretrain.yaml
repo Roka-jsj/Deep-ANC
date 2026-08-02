@@ -1,0 +1,43 @@
+# Stage-1 사전학습 (open-loop, 시뮬레이션 데이터) — Elice A100 기준
+# 실행: python scripts/train/train.py --config configs/train_pretrain.yaml
+# DDP:  torchrun --nproc_per_node=2 scripts/train/train.py --config configs/train_pretrain.yaml
+
+stage: open_loop                # open_loop | closed_loop
+model_config: configs/model_base.yaml
+data_config: configs/data_sim.yaml
+duct_config: configs/duct.yaml
+
+batch_size: 24                  # A100 80GB bf16 기준. OOM 시 16, MIG 1g-10GB 디버깅은 4
+num_workers: 8
+prefetch_factor: 4
+
+optimizer:
+  name: adamw
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+schedule:
+  warmup_steps: 5000
+  total_steps: 400000
+  min_lr: 1.0e-5
+
+amp: bf16
+grad_clip: 5.0
+
+loss:
+  mrstft_ffts: [256, 512, 1024, 2048]
+  lambda_mrstft: 1.0
+  lambda_pow: 1.0e-3
+  lambda_clip: 1.0
+  clip_margin: 0.18
+  # 커리큘럼 A: 평면파 대역(80–1000Hz) ×3 가중. [교차검증 C3]
+  # 커리큘럼 B(풀밴드 균일)는 광대역 S(z) 재보정(coherence≥0.6) 통과 후에만 사용.
+  band_weight: curriculum_a     # curriculum_a | fullband
+
+eval_every: 2000
+log_every: 100
+early_stop_patience: 10         # eval 10회 연속 미개선 시 종료
+ckpt_dir: runs/pretrain_base
+resume: null                    # 재개 시 ckpt 경로
+seed: 20260802

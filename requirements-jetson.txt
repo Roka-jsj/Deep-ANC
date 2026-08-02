@@ -1,0 +1,15 @@
+# Jetson AGX Orin (JetPack 6 / L4T R36.4, CUDA 12.6) 추론용.
+#
+# torch는 PyPI가 아닌 NVIDIA Jetson wheel로 설치해야 한다 (pip -r 로 자동 설치 불가):
+#   1순위: pip install torch --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+#   폴백 : pip install --no-cache-dir \
+#     https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+# TensorRT 파이썬 바인딩은 apt로 설치 (scripts/install/setup_jetson.sh 참조):
+#   sudo apt-get install python3-libnvinfer libnvinfer-bin
+-r requirements.txt
+sounddevice>=0.4.6
+onnx>=1.15
+onnxruntime>=1.17
+cuda-python>=12.0
+tensorboard>=2.15
+pytest>=7.4

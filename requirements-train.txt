@@ -1,0 +1,11 @@
+# Elice Cloud (A100, VSCode CUDA 12.8 환경) 학습용.
+# Jetson(추론)의 torch 2.5.0a0과 메이저 버전을 맞추기 위해 2.5.* 고정.
+# cu121 빌드는 CUDA 12.8 드라이버에서 정상 동작한다.
+-r requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+tensorboard>=2.15
+h5py>=3.9
+pytest>=7.4
+onnx>=1.15
+onnxruntime>=1.17

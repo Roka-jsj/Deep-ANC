@@ -1,0 +1,21 @@
+# 오프라인/실기 평가 설정
+
+# 옥타브 밴드 중심 주파수 (125Hz–8kHz) [교차검증 L2 — 63Hz/16kHz는 마이크·S(z) 유효대역 밖]
+octave_bands_hz: [125, 250, 500, 1000, 2000, 4000, 8000]
+
+# S(z) 보정 유효대역 — 이 구간 밖 수치는 리포트에 "신뢰 낮음" 표기
+# (secondary_path_4s.npz excitation_band=[150,600]. 광대역 재보정 후 갱신할 것)
+trusted_band_hz: [150, 600]
+
+scenarios:                      # scripts/demo/evaluate_session.py 시나리오
+  - {name: tone300,   noise: {type: tone, frequency: 300, amplitude: 0.05}}
+  - {name: multitone, noise: {type: multitone, frequencies: [120, 300, 750], amplitude: 0.04}}
+  - {name: band,      noise: {type: band, band: [80, 1000], amplitude: 0.05}}
+  - {name: nonlinear, noise: {type: nonlinear, frequency: 210, amplitude: 0.06}}
+
+protocol:
+  baseline_seconds: 10          # ANC OFF 베이스라인
+  on_seconds: 30                # ANC ON
+  tail_seconds: 5               # ANC OFF 복귀
+
+report_dir: results
