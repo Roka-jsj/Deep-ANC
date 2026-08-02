@@ -124,7 +124,8 @@ class RealtimeANC:
 
             self.in_ring.push(np.stack([err, ref_mic, source]))
 
-            y_blk, had_data = self.out_ring.pop_or_silence(frames)
+            # 백로그가 1 hop 을 넘으면 최신으로 재동기 — 언더런에 의한 지연 누적 방지 (#9)
+            y_blk, had_data = self.out_ring.pop_latest(frames, keep_backlog=frames)
             y_lim, clip_frac = self.safety.limit_output(y_blk[0])
 
             if self.state.anc_enabled != self._last_anc:
@@ -178,6 +179,7 @@ class RealtimeANC:
                 "ctrl_dbfs": power_to_db(ctrl_power),
                 "reduction_db": reduction,
                 "underruns": self.out_ring.underruns,
+                "drops": self.out_ring.drops,
                 "xruns": self.xruns,
                 "step_ms": float(np.mean(self.step_times_ms[-50:])) if self.step_times_ms else 0.0,
             }
@@ -199,13 +201,15 @@ class RealtimeANC:
         while not self.state.quit_event.is_set():
             if self.state.reset_event.is_set():
                 self.engine.reset()
-                self.in_ring.reset()
-                self.out_ring.reset()
+                # SPSC: 이 스레드는 in_ring 의 소비자만이다 — out_ring 의 read_pos 는
+                # 콜백 소유이므로 건드리지 않는다 (콜백의 pop_latest 가 자연 배출).
+                self.in_ring.consumer_reset()
                 self.state.reset_event.clear()
             if not self.in_ring.wait_for(self.hop, timeout=0.1):
                 continue
-            blk = self.in_ring.pop(self.hop)
-            if blk is None:
+            # 추론이 뒤처지면 입력 백로그를 8 hop 까지만 허용 (지연 폭주 방지)
+            blk, ok = self.in_ring.pop_latest(self.hop, keep_backlog=self.hop * 8)
+            if not ok:
                 continue
             err, ref_mic, ref_digital = blk
             ref = ref_digital if self.reference == "digital" else ref_mic
@@ -363,6 +367,10 @@ def run_calibrate(cfg: dict) -> int:
 
     cfg = dict(cfg)
     cfg["noise"] = {"type": "silence"}
+    # 측정 모드: 워치독이 처프 출력을 mute 하지 않도록 임계값 무력화 (#13)
+    cfg["safety"] = dict(cfg.get("safety", {}))
+    cfg["safety"].update({"deadline_miss_mute": 10**9, "divergence_ratio": 1e12,
+                          "clip_streak_mute": 10**9})
     anc = RealtimeANC(cfg, record_seconds=seconds + 2.0)
     anc.engine = ChirpEngine(anc.hop)
     anc.state.anc_enabled = True          # 게이트를 열어 처프를 내보낸다
@@ -382,10 +390,15 @@ def run_calibrate(cfg: dict) -> int:
     lag = int(np.argmax(np.abs(corr))) - (ctrl.size - 1)
     sp = load_secondary_path(cfg["secondary_path"])
     handoff = int(cfg["duct"]["secondary_path"].get("handoff_extra_samples", 256))
-    expected = sp.delay_samples + handoff
-    print(f"측정 실효 지연 : {lag}샘플 ({1000*lag/fs:.2f}ms)")
-    print(f"학습 가정 지연 : {expected}샘플 (캘리브레이션 {sp.delay_samples} + 핸드오프 {handoff})")
-    print(f"차이           : {lag - expected:+d}샘플 ({1000*(lag-expected)/fs:+.2f}ms)")
+    # rec['control'] 은 블록이 실제 "출력"되는 콜백 시점(핸드오프 이후)에 기록되므로,
+    # 측정 lag 의 기대값은 캘리브레이션 지연(1342)뿐이다 — 핸드오프는 별도 합산 (#11)
+    expected = sp.delay_samples
+    total_training = sp.delay_samples + handoff
+    print(f"측정 지연(출력→에러마이크): {lag}샘플 ({1000*lag/fs:.2f}ms)")
+    print(f"캘리브레이션 기대값        : {expected}샘플 | 차이 {lag - expected:+d}샘플 "
+          f"({1000*(lag-expected)/fs:+.2f}ms)")
+    print(f"학습 플랜트 총지연         : 측정 {lag} + 핸드오프 {handoff} = {lag + handoff} "
+          f"(설정값 {total_training})")
     if abs(lag - expected) > 512:
         print(
             "→ 차이가 지터 증강 범위(+512)를 벗어납니다. duct.yaml 의 "
@@ -413,6 +426,8 @@ def main() -> int:
         return run_calibrate(cfg)
     run_seconds = args.run_seconds if args.run_seconds is not None else float(cfg.get("run_seconds", 0.0))
     record = args.record or cfg.get("record")
+    if record and run_seconds <= 0:
+        parser.error("--record 는 녹음 버퍼 크기 산정을 위해 --run-seconds 가 필요합니다")
     return run_cli(cfg, run_seconds, record)
 
 

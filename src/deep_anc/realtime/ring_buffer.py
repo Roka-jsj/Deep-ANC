@@ -21,18 +21,23 @@ class SPSCRing:
         self.read_pos = 0
         self.underruns = 0
         self.overruns = 0
+        self.drops = 0
         self.cond = threading.Condition()
 
     def available(self) -> int:
         return self.write_pos - self.read_pos
 
     def push(self, block: np.ndarray) -> None:
-        """생산자 전용. block: [channels, n]. 가득 차면 가장 오래된 데이터를 버린다."""
+        """생산자 전용. block: [channels, n].
+
+        SPSC 계약: 생산자는 write_pos 만, 소비자는 read_pos 만 움직인다.
+        가득 차면 **새 블록을 버린다** (read_pos 를 건드리면 소비자와 경쟁 — 리뷰 결함 #10).
+        백로그 정리는 소비자 쪽 pop_latest() 가 담당한다.
+        """
         n = block.shape[-1]
         if self.available() + n > self.capacity:
-            drop = self.available() + n - self.capacity
-            self.read_pos += drop
             self.overruns += 1
+            return
         start = self.write_pos % self.capacity
         end = start + n
         if end <= self.capacity:
@@ -67,10 +72,24 @@ class SPSCRing:
             return np.zeros((self.channels, n), dtype=np.float32), False
         return out, True
 
+    def pop_latest(self, n: int, keep_backlog: int) -> tuple[np.ndarray, bool]:
+        """소비자용: 백로그가 keep_backlog 를 넘으면 오래된 샘플을 버리고 최신으로 재동기.
+
+        언더런 1회마다 파이프라인 지연이 1 hop 씩 영구 증가하는 것을 막는다
+        (리뷰 확정 결함 #9 — 워밍업/프라이밍 언더런 후 지연이 학습 규약(+1 hop)에서
+        이탈하는 문제). drops 카운터로 표면화한다.
+        """
+        excess = self.available() - keep_backlog
+        if excess > 0:
+            self.read_pos += excess            # 소비자 소유 인덱스 — 단독 전진 안전
+            self.drops += excess
+        return self.pop_or_silence(n)
+
     def wait_for(self, n: int, timeout: float) -> bool:
         """소비자용: n 샘플이 쌓일 때까지 대기."""
         with self.cond:
             return self.cond.wait_for(lambda: self.available() >= n, timeout=timeout)
 
-    def reset(self) -> None:
+    def consumer_reset(self) -> None:
+        """소비자 전용: 읽기 위치를 현재 쓰기 위치로 (버퍼 비우기)."""
         self.read_pos = self.write_pos

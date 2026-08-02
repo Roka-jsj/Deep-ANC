@@ -9,9 +9,11 @@ dist/
 venv/
 
 # 데이터/실험 산출물 (용량 — GitHub에 올리지 않음)
-data/
-runs/
-results/
+# 반드시 루트 앵커(/)를 유지할 것 — 비앵커 패턴은 src/deep_anc/data/, scripts/data/ 까지 무시한다
+/data/
+/runs/
+/results/
+/transfer/
 *.wav
 *.flac
 *.h5

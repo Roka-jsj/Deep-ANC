@@ -36,8 +36,10 @@ secondary_path:
   delay_jitter_range: [0, 512]  # 학습 증강용 비대칭 지터 (핸드오프 2 hop까지 커버)
 
 digital_reference:
-  # digital-ref 모드의 1차경로 순수지연(소음 ch0 출력 → 에러마이크).
-  # scripts/data/calibrate_wideband.py --output-channel noise 로 실측 후 기입. [교차검증 C2]
+  # digital-ref 모드의 1차경로 순수지연(소음 ch0 출력 → 에러마이크 도달까지의 "총" 지연).
+  # scripts/data/calibrate_wideband.py --output-channel noise 로 실측 후 그 값을 그대로 기입. [교차검증 C2]
+  # 주의: 시뮬 RIR(p_err)에는 음향 온셋 t_ac(NS→ERR)가 이미 포함되어 있어, 코드가
+  # RIR 과 결합할 때 t_ac 를 자동으로 빼고 전기/버퍼 성분만 적용한다 (이중 계상 방지).
   d_noise_delay_samples: null
 
 calibration:

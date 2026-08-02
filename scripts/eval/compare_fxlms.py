@@ -30,7 +30,13 @@ from deep_anc.realtime.noise_gen import NoiseProgram                 # noqa: E40
 
 
 def make_scenario(noise_cfg: dict, seconds: float, fs: int, duct_cfg: dict, sp_delay: int):
-    """digital-ref 시나리오 신호 생성: x_ref = 소스, d = P_err·지연(소스)."""
+    """digital-ref 시나리오 신호 생성: x_ref = 소스, d = P_err·지연(소스).
+
+    p_err RIR 에 t_ac(NS→ERR) 온셋이 포함되어 있으므로 전기/버퍼 성분만 추가 지연한다
+    (synth_dataset 과 동일 규약 — 이중 계상 방지).
+    """
+    from deep_anc.config import duct_distance_samples
+
     n_samples = int(seconds * fs) // 256 * 256
     program = NoiseProgram(noise_cfg, fs)
     src = program.generate(n_samples)
@@ -38,7 +44,8 @@ def make_scenario(noise_cfg: dict, seconds: float, fs: int, duct_cfg: dict, sp_d
     d_noise = duct_cfg.get("digital_reference", {}).get("d_noise_delay_samples")
     if d_noise is None:
         d_noise = default_d_noise_delay(duct_cfg, fs, sp_delay)
-    d = _delay_np(fft_filter(src, paths["p_err"]), int(d_noise))
+    extra = max(0, int(d_noise) - duct_distance_samples(duct_cfg, "noise_speaker", "error_mic", fs))
+    d = _delay_np(fft_filter(src, paths["p_err"]), extra)
     return src.astype(np.float32), d.astype(np.float32)
 
 

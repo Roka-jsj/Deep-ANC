@@ -82,3 +82,26 @@ def test_d_noise_default_geometry(cfgs):
     d = default_d_noise_delay(duct, fs, s_path_delay=1342)
     # CS(1.050)→ERR(1.100)=7샘플, NS(0)→ERR(1.100)=154샘플 → 1342-7+154=1489
     assert d == 1342 - 7 + 154
+
+
+def test_d_noise_no_double_count(cfgs, rir_bank):
+    """리뷰 결함 #1 회귀: RIR 에 t(NS→ERR) 온셋이 포함되므로 dataset 추가 지연은
+    총지연 − t(NS→ERR) 이어야 하고, 결과 d 의 온셋은 총지연(≈1489)과 일치해야 한다."""
+    from deep_anc.config import duct_distance_samples
+    from deep_anc.data.synth_dataset import _delay_np
+    from deep_anc.dsp.filters import fft_filter
+
+    data, duct = cfgs
+    fs = 48000
+    ds = SynthANCDataset(dict(data), duct, split="train", seed=1, rir_bank=rir_bank)
+    total = default_d_noise_delay(duct, fs, s_path_delay=1342)
+    t_ns_err = duct_distance_samples(duct, "noise_speaker", "error_mic", fs)
+    assert ds.d_noise_total == total
+    assert ds.d_noise_delay == total - t_ns_err
+
+    imp = np.zeros(ds.segment, dtype=np.float32)
+    imp[0] = 1.0
+    d = _delay_np(fft_filter(imp, rir_bank["p_err"][0]), ds.d_noise_delay)
+    onset = int(np.flatnonzero(np.abs(d) > np.max(np.abs(d)) * 0.05)[0])
+    # RIR 위치 지터(±1cm)·저역통과 전이 여유 포함
+    assert abs(onset - total) <= 24, f"d 온셋 {onset} vs 총지연 {total}"

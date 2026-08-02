@@ -72,6 +72,13 @@ class Trainer:
         set_seed(seed)
 
         self.stage = str(cfg.get("stage", "open_loop"))
+        if self.stage == "closed_loop" and self.world > 1:
+            # 폐루프는 언랩된 모듈의 streaming_step 을 직접 호출하므로 DDP 그래디언트
+            # 동기화가 동작하지 않는다 (리뷰 확정 결함 #3). 20~50k step 단기 학습이므로
+            # 단일 GPU 로 실행할 것.
+            raise RuntimeError(
+                "closed_loop 스테이지는 단일 GPU 전용입니다 — torchrun 없이 실행하세요."
+            )
         self.fs = int(cfg["data"]["sample_rate"])
         self.run_dir = Path(cfg["ckpt_dir"])
         if not self.run_dir.is_absolute():
@@ -120,6 +127,8 @@ class Trainer:
         self.train_iter = iter(loader)
 
         recorded_manifest = cfg.get("recorded_manifest")
+        if recorded_manifest and not Path(recorded_manifest).is_absolute():
+            recorded_manifest = str(REPO_ROOT / recorded_manifest)
         if recorded_manifest and Path(recorded_manifest).exists():
             rec = RecordedANCDataset(recorded_manifest, cfg["data"], split="train", seed=seed + 5)
             rec_loader = DataLoader(
@@ -178,13 +187,18 @@ class Trainer:
                 print("[trainer] tensorboard 미설치 — 파일 로그만 기록합니다")
         self.loss_log = open(self.run_dir / "loss_log.txt", "a", encoding="utf-8") if self.is_main else None
 
-        # init_ckpt(파인튜닝) → resume(재개) 순서로 적용
-        init_ckpt = cfg.get("init_ckpt")
+        # init_ckpt(파인튜닝) → resume(재개) 순서로 적용 (상대경로는 저장소 루트 기준)
+        def _abs(p):
+            return str(p) if p is None or Path(p).is_absolute() else str(REPO_ROOT / p)
+
+        init_ckpt = _abs(cfg.get("init_ckpt"))
+        if cfg.get("init_ckpt") and not Path(init_ckpt).exists() and self.is_main:
+            print(f"[trainer] 경고: init_ckpt({init_ckpt})가 없어 무시합니다")
         if init_ckpt and Path(init_ckpt).exists():
             state = load_checkpoint(init_ckpt, self.model, restore_rng=False, map_location="cpu")
             if self.is_main:
                 print(f"[trainer] init_ckpt 로드: {init_ckpt} (step {state.get('step')})")
-        resume = cfg.get("resume")
+        resume = _abs(cfg.get("resume"))
         if resume and Path(resume).exists():
             state = load_checkpoint(resume, self.model, self.optimizer, self.scheduler, map_location="cpu")
             self.step = int(state.get("step", 0))
@@ -228,7 +242,13 @@ class Trainer:
         y_parts: list[torch.Tensor] = []
         e_hist = torch.zeros_like(d)
 
+        # 되먹임 경로와 최종 손실이 동일한 플랜트 섭동·비선형을 쓰도록 한 번만 샘플링
+        # (리뷰 확정 결함 #6 — 되먹임만 공칭 선형이면 배포 분포와 어긋난다)
         plant = self.criterion.plant
+        perturb = plant.sample_perturbation() if self.criterion.training else {"jitter": 0}
+        nl = self.criterion.nonlinear
+        nl_params = nl.sample(x.shape[0]) if (self.criterion.training and nl is not None) else None
+
         for start in range(0, T, chunk):
             sl = slice(start, start + chunk)
             err_in = e_hist[..., max(0, start - fb_delay) : max(0, start - fb_delay) + chunk]
@@ -237,14 +257,17 @@ class Trainer:
             x_blk = torch.cat([x[:, :1, sl], err_in], dim=1)
             y_blk, states = raw.streaming_step(x_blk, states)
             y_parts.append(y_blk.float())          # 플랜트 FFT 는 FP32 필요 (bf16 미지원)
-            # e 프리픽스 갱신 (S 는 선형이므로 프리픽스 conv 로 충분)
+            # e 프리픽스 갱신 — 프리픽스 전체 재컨볼브 O(T²/chunk)는 알려진 성능 한계
+            # (fb_delay ≥ chunk 라 인과성은 보장). 최적화 시 스트리밍 FIR 상태로 대체 가능.
             y_so_far = torch.cat(y_parts, dim=-1)
-            s_y = plant(y_so_far, {"jitter": 0})
+            y_nl = nl.apply_torch(y_so_far, nl_params) if nl_params is not None else y_so_far
+            s_y = plant(y_nl, perturb)
             e_hist[..., : y_so_far.shape[-1]] = d[..., : y_so_far.shape[-1]] + s_y
 
         y = torch.cat(y_parts, dim=-1)
         skip = int(warmup_s * self.fs)
-        return self.criterion(y[..., skip:], d[..., skip:])
+        # 절단은 손실 내부에서 플랜트 적용 "후"에 수행 (결함 #2/#5)
+        return self.criterion(y, d, loss_start_sample=skip, perturb=perturb, nl_params=nl_params)
 
     def _validate(self) -> float:
         self.model.eval()
@@ -307,6 +330,7 @@ class Trainer:
 
             if self.step % eval_every == 0:
                 val_nmse = self._validate()
+                stop_flag = torch.zeros(1, device=self.device)
                 if self.is_main:
                     print(f"[eval] step {self.step}: val NMSE {val_nmse:.2f} dB", flush=True)
                     if self.writer:
@@ -329,9 +353,12 @@ class Trainer:
                         bad_evals += 1
                         if patience and bad_evals >= patience:
                             print(f"[eval] {patience}회 연속 미개선 — 조기 종료", flush=True)
-                            break
+                            stop_flag.fill_(1.0)
+                # 조기종료 결정을 전 랭크에 전파 — rank0 만 break 하면 나머지가 행업된다 (#7)
                 if self.world > 1:
-                    dist.barrier()
+                    dist.broadcast(stop_flag, src=0)
+                if float(stop_flag.item()) > 0:
+                    break
 
         if self.is_main:
             save_checkpoint(

@@ -85,11 +85,22 @@ class ANCLoss(nn.Module):
                 f"win_{fft_size}", torch.hann_window(fft_size), persistent=False
             )
 
-    def forward(self, y: torch.Tensor, d: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def forward(
+        self,
+        y: torch.Tensor,
+        d: torch.Tensor,
+        loss_start_sample: int = 0,
+        perturb: dict | None = None,
+        nl_params: dict | None = None,
+    ) -> tuple[torch.Tensor, dict]:
         """y, d: [B, 1, T] (물리 스케일). 반환: (total_loss, metrics).
 
-        FFT(플랜트·STFT)는 bf16 을 지원하지 않으므로 손실 전체를 FP32 로 계산한다
-        (autocast 내부에서 호출되어도 안전).
+        - loss_start_sample: 플랜트를 전체 길이에 적용한 **뒤** NMSE/MR-STFT 에서 제외할
+          앞구간(폐루프 워밍업). 잘린 y 에 플랜트를 걸면 경계 뒤 ~(지연+FIR) 구간의
+          S·y 기여가 사라지므로 반드시 여기서 잘라야 한다 (리뷰 확정 결함 #2/#5).
+        - perturb/nl_params: 폐루프 학습에서 되먹임 경로와 동일한 플랜트/비선형을
+          쓰기 위한 외부 주입 (리뷰 확정 결함 #6). None 이면 내부 샘플링.
+        - FFT(플랜트·STFT)는 bf16 미지원 → 손실 전체 FP32 고정.
         """
         if y.is_cuda:
             autocast_off = torch.autocast("cuda", enabled=False)
@@ -98,22 +109,34 @@ class ANCLoss(nn.Module):
 
             autocast_off = contextlib.nullcontext()
         with autocast_off:
-            return self._forward_fp32(y.float(), d.float())
+            return self._forward_fp32(
+                y.float(), d.float(), loss_start_sample, perturb, nl_params
+            )
 
-    def _forward_fp32(self, y: torch.Tensor, d: torch.Tensor) -> tuple[torch.Tensor, dict]:
+    def _forward_fp32(
+        self,
+        y: torch.Tensor,
+        d: torch.Tensor,
+        loss_start_sample: int = 0,
+        perturb: dict | None = None,
+        nl_params: dict | None = None,
+    ) -> tuple[torch.Tensor, dict]:
         batch = y.shape[0]
 
         # 평가(eval) 모드에서는 비선형/섭동 없이 결정적으로 계산 — val 지표 일관성
         y_nl = y
         if self.training and self.nonlinear is not None:
-            params = self.nonlinear.sample(batch)
-            y_nl = self.nonlinear.apply_torch(y, params)
+            if nl_params is None:
+                nl_params = self.nonlinear.sample(batch)
+            y_nl = self.nonlinear.apply_torch(y, nl_params)
 
-        perturb = self.plant.sample_perturbation() if self.training else {"jitter": 0}
+        if perturb is None:
+            perturb = self.plant.sample_perturbation() if self.training else {"jitter": 0}
         e = d + self.plant(y_nl, perturb)
 
-        e_flat = e.squeeze(1)
-        d_flat = d.squeeze(1)
+        skip = int(loss_start_sample)
+        e_flat = e.squeeze(1)[..., skip:]
+        d_flat = d.squeeze(1)[..., skip:]
 
         # NMSE (dB) — 감쇠량 지표 직접 최소화
         e_pow = e_flat.pow(2).sum(dim=-1)
