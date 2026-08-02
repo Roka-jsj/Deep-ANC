@@ -66,13 +66,19 @@ def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
 
 
 def load_train_config(path: str | Path, overrides: list[str] | None = None) -> dict:
-    """학습 설정 로드 + 참조된 model/data/duct 설정을 함께 해석."""
+    """학습 설정 로드 + 참조된 model/data/duct 설정을 함께 해석.
+
+    오버라이드는 두 번 적용한다: 참조 경로 자체(model_config 등)를 바꿀 수 있도록
+    로드 전에 한 번, 로드된 서브 설정의 내부 키(data.* 등)를 바꿀 수 있도록 후에 한 번.
+    """
     cfg = load_yaml(path)
     if overrides:
         cfg = apply_overrides(cfg, overrides)
     cfg["model"] = load_yaml(cfg["model_config"])
     cfg["data"] = load_yaml(cfg["data_config"])
     cfg["duct"] = load_yaml(cfg["duct_config"])
+    if overrides:
+        cfg = apply_overrides(cfg, overrides)
     validate_duct(cfg["duct"])
     return cfg
 

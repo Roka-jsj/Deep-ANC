@@ -86,11 +86,26 @@ class ANCLoss(nn.Module):
             )
 
     def forward(self, y: torch.Tensor, d: torch.Tensor) -> tuple[torch.Tensor, dict]:
-        """y, d: [B, 1, T] (물리 스케일). 반환: (total_loss, metrics)."""
+        """y, d: [B, 1, T] (물리 스케일). 반환: (total_loss, metrics).
+
+        FFT(플랜트·STFT)는 bf16 을 지원하지 않으므로 손실 전체를 FP32 로 계산한다
+        (autocast 내부에서 호출되어도 안전).
+        """
+        if y.is_cuda:
+            autocast_off = torch.autocast("cuda", enabled=False)
+        else:
+            import contextlib
+
+            autocast_off = contextlib.nullcontext()
+        with autocast_off:
+            return self._forward_fp32(y.float(), d.float())
+
+    def _forward_fp32(self, y: torch.Tensor, d: torch.Tensor) -> tuple[torch.Tensor, dict]:
         batch = y.shape[0]
 
+        # 평가(eval) 모드에서는 비선형/섭동 없이 결정적으로 계산 — val 지표 일관성
         y_nl = y
-        if self.nonlinear is not None:
+        if self.training and self.nonlinear is not None:
             params = self.nonlinear.sample(batch)
             y_nl = self.nonlinear.apply_torch(y, params)
 

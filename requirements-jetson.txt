@@ -9,7 +9,8 @@
 -r requirements.txt
 sounddevice>=0.4.6
 onnx>=1.15
-onnxruntime>=1.17
+# 1.19+ 는 Tegra(aarch64)에서 cpuinfo 크래시 (세션 생성 시 abort) — 1.18.1 로 고정
+onnxruntime==1.18.1
 cuda-python>=12.0
 tensorboard>=2.15
 pytest>=7.4

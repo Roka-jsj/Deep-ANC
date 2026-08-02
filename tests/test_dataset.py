@@ -45,11 +45,12 @@ def test_dataset_items(cfgs, rir_bank, mode):
     data = dict(data)
     data["reference_mode"] = mode
     ds = SynthANCDataset(data, duct, split="train", seed=1, rir_bank=rir_bank)
+    assert ds.segment % 256 == 0                  # 런타임 블록 배수 요건
     it = iter(ds)
     for _ in range(3):
         item = next(it)
-        assert item["x"].shape == (2, 24000)
-        assert item["d"].shape == (1, 24000)
+        assert item["x"].shape == (2, ds.segment)
+        assert item["d"].shape == (1, ds.segment)
         assert torch.isfinite(item["x"]).all()
         assert torch.isfinite(item["d"]).all()
 
