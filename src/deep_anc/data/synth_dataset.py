@@ -96,7 +96,11 @@ class SynthANCDataset(IterableDataset):
         # 소스 풀 — source_mix_ratio 의 키가 곧 태그다 ('synthetic' 제외).
         # manifest(data/manifests/<tag>.jsonl)가 없는 태그는 합성원으로 자동 폴백하므로,
         # 데이터셋을 나중에 추가해도 설정 변경 없이 활성화된다 (speech/music 등).
-        self.mix_ratio = dict(data_cfg.get("source_mix_ratio", {"synthetic": 1.0}))
+        # acoustic-ref 는 전용 소스 구성을 사용 (주기성↑ + 예측불가 성분 무해화 학습) [로드맵 A2]
+        if self.reference_mode == "acoustic" and data_cfg.get("source_mix_ratio_acoustic"):
+            self.mix_ratio = dict(data_cfg["source_mix_ratio_acoustic"])
+        else:
+            self.mix_ratio = dict(data_cfg.get("source_mix_ratio", {"synthetic": 1.0}))
         manifest_dir = _resolve_path(data_cfg.get("noise_manifest_dir", "data/manifests"))
         self.pools: dict[str, list] = {
             tag: [str(manifest_dir / f"{tag}.jsonl")]

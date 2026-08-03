@@ -7,15 +7,24 @@ octave_bands_hz: [125, 250, 500, 1000, 2000, 4000, 8000]
 # (secondary_path_4s.npz excitation_band=[150,600]. 광대역 재보정 후 갱신할 것)
 trusted_band_hz: [150, 600]
 
+# 시나리오는 프로젝트 절대 목표 2가지를 분리 측정한다:
+#   기능1(저주파+고주파 노이즈 제거): tone300/multitone/band(저역) + hf_tone/hf_band(고역)
+#   기능2(모든 소리 제거): nonlinear + file(음성/음악 wav 재생 — --set noise.file 지정)
 scenarios:                      # scripts/demo/evaluate_session.py 시나리오
   - {name: tone300,   noise: {type: tone, frequency: 300, amplitude: 0.05}}
   - {name: multitone, noise: {type: multitone, frequencies: [120, 300, 750], amplitude: 0.04}}
   - {name: band,      noise: {type: band, band: [80, 1000], amplitude: 0.05}}
+  - {name: hf_tone,   noise: {type: tone, frequency: 1200, amplitude: 0.04}}   # 고역(컷오프 이하)
+  - {name: hf_band,   noise: {type: band, band: [800, 1600], amplitude: 0.04}} # 고역 대역 — S(z) 재보정 후 유효
   - {name: nonlinear, noise: {type: nonlinear, frequency: 210, amplitude: 0.06}}
 
 protocol:
   baseline_seconds: 10          # ANC OFF 베이스라인
   on_seconds: 30                # ANC ON
   tail_seconds: 5               # ANC OFF 복귀
+
+# 미학습(held-out) 비선형 강도 평가축 [로드맵 A1] — 문헌(Deep ANC/ARN) 프로토콜과 정합:
+# 학습 그리드(0.05/0.1/0.2) 밖의 중간 강도로 일반화를 측정한다.
+heldout_sef_eta: 0.15
 
 report_dir: results

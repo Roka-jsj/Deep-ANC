@@ -1,5 +1,15 @@
 # 07. 평가 프로토콜
 
+## 0. 절대 목표 2가지와 측정 매핑
+
+| 목표 | 측정 | 도구 |
+|---|---|---|
+| **기능1 — 저주파+고주파 노이즈 제거** | 옥타브밴드별 감쇠(125~8000Hz), 저역(tone300/multitone/band) + 고역(hf_tone/hf_band) 시나리오, held-out 비선형 η NMSE | evaluate_offline §기능1, evaluate_session |
+| **기능2 — 모든 소리 제거 (quiet zone)** | **소스 종류별** 감쇠(합성/실환경소음/음성/음악/지속환경/기계음/이벤트음), file 시나리오(음성·음악 wav 재생→상쇄) | evaluate_offline §기능2, run_realtime `--set noise.type=file` |
+
+한쪽 대역·한쪽 소스만 좋은 결과는 목표 미달로 판정한다. 고역(>800Hz)은 광대역 S(z)
+재보정(docs/02 §4)이 선행 게이트, 1633Hz 이상은 물리 한계 명시(docs/01).
+
 ## 1. 지표
 
 | 지표 | 정의 | 좋은 방향 |
@@ -51,6 +61,8 @@ python scripts/demo/evaluate_session.py --controllers fxlms dl --scenarios tone3
 2. 동일 S(z) 자산 (FxLMS 도 secondary_path_4s.npz)
 3. FxLMS 수렴 시간을 인정 — ON 구간 후반부로 평가 (오프라인은 후반 1/3)
 4. 실기에서는 마이크 캘리브레이션이 없어도 감쇠(비율)는 유효 — 절대 SPL 주장은 하지 않는다
+5. **강튜닝 베이스라인 병기** [로드맵 A4]: 기본 설정 FxLMS 만이 아니라 스텝사이즈/탭수를
+   튜닝한 FxLMS 와 고차 인과 Wiener 상한을 함께 표에 실어 "약한 베이스라인 비판"을 선제 차단한다
 
 ## 6. 리포트 양식
 

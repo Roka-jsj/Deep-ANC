@@ -20,6 +20,17 @@ source_mix_ratio:
   machine: 0.07                 # MIMII DG fan (16kHz ⚠ 저역 기계음 전용 — 덕트 제어대역 <1.6kHz 커버)
   esc50: 0.05                   # ESC-50 (비정상 환경음 — 강건화용 소량) [교차검증 L1]
 
+# acoustic-ref 모드 전용 구성 [로드맵 A2] — reference_mode: acoustic 일 때 위 표를 대체.
+# 주기성/공진(P≈30ms 에서 유일하게 예측 가능) 비중을 키우되, 예측 불가 광대역도 명시 포함
+# (do-no-harm — "출력 0" 이 최적인 성분을 분포에 넣어야 증폭 안 하는 법을 배운다).
+source_mix_ratio_acoustic:
+  synthetic: 0.45               # 공진(210/350/489/629Hz) 가중 생성기 — 주기·협대역 중심
+  machine: 0.15                 # 팬/회전기계 (준주기)
+  dns_fullband: 0.20            # 예측 불가 광대역 — 무해화(0dB) 학습용
+  demand: 0.10
+  speech: 0.05                  # 비주기 — 무해화 학습용
+  esc50: 0.05
+
 noise_manifest_dir: data/manifests
 rir_bank: data/rir_bank/duct_rirs_v1.npz
 
@@ -29,7 +40,9 @@ snr_mic_noise_db: [5, 30]       # 마이크 자기잡음 SNR
 dc_hum_prob: 0.2
 
 nonlinear:                      # 스피커/앰프 비선형 (Zhang & Wang 2021 프로토콜)
-  sef_eta_choices: [0.1, 0.5, 1.0, 10.0]   # η·tanh(x/η), 10≈선형
+  # 물리 스케일 재보정 [로드맵 A1]: |y|≤0.2(리미터) 기준으로 η≥0.5 는 사실상 선형(no-op)이라
+  # 증강이 무력화됨. η 를 신호 스케일에 상대화 — 10.0 은 선형 통과 센티널.
+  sef_eta_choices: [0.05, 0.1, 0.2, 10.0]  # η·tanh(x/η): 강/중/약 포화 + 선형
   drive_range: [1.0, 4.0]
   hardclip_prob: 0.05
 

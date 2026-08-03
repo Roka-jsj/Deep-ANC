@@ -82,12 +82,45 @@ def main() -> int:
     d_cat, e_cat = d_np.reshape(-1), e_np.reshape(-1)
     band_att = octave_band_attenuation(d_cat, e_cat, fs, bands, trusted)
 
+    # [기능1 보조] held-out 비선형 강도에서의 NMSE — 학습 그리드 밖 일반화 (로드맵 A1)
+    from deep_anc.dsp.nonlinear import sef_torch
+
+    eta_h = float(eval_cfg.get("heldout_sef_eta", 0.15))
+    with torch.no_grad():
+        e_nl = d + plant(sef_torch(y.float(), eta_h), {"jitter": 0})
+    nmse_heldout = float(
+        np.mean([nmse_db(d_np[i], e_nl.squeeze(1).cpu().numpy()[i]) for i in range(d_np.shape[0])])
+    )
+
+    # [기능2] 소스 종류별 감쇠 — "모든 소리 제거" 목표의 분리 점수 (소음/음성/음악/기계음…)
+    per_source: list[tuple[str, float]] = []
+    for tag in ["synthetic"] + [t for t in data_cfg.get("source_mix_ratio", {}) if t != "synthetic"]:
+        tag_cfg = dict(data_cfg)
+        tag_cfg["source_mix_ratio"] = {tag: 1.0}
+        try:
+            tag_ds = SynthANCDataset(tag_cfg, duct_cfg, split="test", seed=555)
+            if tag != "synthetic":
+                pool_paths = tag_ds.pools.get(tag, [])
+                if not pool_paths or not Path(pool_paths[0]).exists():
+                    continue                  # manifest 없음 — 합성 폴백 값은 무의미하므로 제외
+            tb = make_eval_batch(tag_ds, n_items=8, seed=555)
+            with torch.no_grad():
+                ty = model(tb["x"].to(device))
+                te = tb["d"].to(device) + plant(ty.float(), {"jitter": 0})
+            td, te_np = tb["d"].squeeze(1).numpy(), te.squeeze(1).cpu().numpy()
+            per_source.append((tag, float(np.mean([nmse_db(td[i], te_np[i]) for i in range(td.shape[0])]))))
+        except Exception as exc:
+            print(f"[skip] 소스별 평가 {tag}: {exc}")
+
     lines = [
         f"# 오프라인 평가 — {Path(args.ckpt).name}",
         "",
         f"- 테스트 아이템: {len(per_item)}개 (reference_mode={data_cfg.get('reference_mode')})",
         f"- **평균 NMSE: {overall:.2f} dB** (감쇠 {-overall:.2f} dB)",
+        f"- held-out 비선형(η={eta_h}) NMSE: {nmse_heldout:.2f} dB — 학습 그리드 밖 일반화",
         f"- 아이템 분포: 중앙값 {np.median(per_item):.2f} dB / 최악 {np.max(per_item):.2f} dB",
+        "",
+        "## 기능1 — 주파수 대역별 감쇠 (저주파+고주파)",
         "",
         "| 밴드(Hz) | 감쇠(dB) | 신뢰 |",
         "|---|---|---|",
@@ -95,7 +128,17 @@ def main() -> int:
     for b in band_att:
         mark = "O" if b["trusted"] else "낮음*"
         lines.append(f"| {b['center_hz']:.0f} | {b['attenuation_db']:+.2f} | {mark} |")
-    lines += ["", "*: S(z) 보정 유효대역 밖 — 광대역 재보정 전에는 참고용."]
+    lines += [
+        "",
+        "*: S(z) 보정 유효대역 밖 — 광대역 재보정 전에는 참고용.",
+        "",
+        "## 기능2 — 소스 종류별 감쇠 (모든 소리 제거)",
+        "",
+        "| 소스 | NMSE(dB) | 감쇠(dB) |",
+        "|---|---|---|",
+    ]
+    for tag, v in per_source:
+        lines.append(f"| {tag} | {v:+.2f} | {-v:+.2f} |")
     (out_dir / "metrics.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     spectrogram_pair(d_np[0], e_np[0], fs, out_dir / "spec_item0.png", "ANC OFF vs ON (시뮬)")
