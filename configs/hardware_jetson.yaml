@@ -17,8 +17,8 @@ audio:
     dtype: int16                # 정보용(코드는 int16 고정)
 
 channels:
-  error_mic: 0                  # INMP441, L/R -> GND
-  reference_mic: 1              # INMP441, L/R -> 3.3V  (⚠ 과거 무신호 이력 — docs/02_hardware_setup.md 점검 절차)
+  error_mic: 0                  # INMP441, L/R -> J30 pin39 GND (파랑, left frame)
+  reference_mic: 1              # INMP441, L/R -> J30 pin17 3.3V (초록, right frame; ⚠ 과거 무신호 이력)
   noise_out: 0                  # 좌측 소음 스피커
   cancel_out: 1                 # 우측 상쇄 스피커 (TPA3116D2)
 

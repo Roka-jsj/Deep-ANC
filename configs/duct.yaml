@@ -36,6 +36,9 @@ secondary_path:                 # 학습·런타임·평가가 공용하는 단�
   handoff_extra_samples: 256
 
 digital_reference:
+  # noise 출력→error mic ESS 측정 compact FIR+순수지연 NPZ. 측정 전에는 null이며,
+  # data_sim.digital_primary_path_mode=measured일 때만 필수로 로드한다.
+  primary_path_npz: null
   # digital-ref 모드의 1차경로 순수지연(소음 ch0 출력 → 에러마이크 도달까지의 "총" 지연).
   # scripts/data/calibrate_wideband.py --output-channel noise 로 실측 후 그 값을 그대로 기입. [교차검증 C2]
   # 주의: 시뮬 RIR(p_err)에는 음향 온셋 t_ac(NS→ERR)가 이미 포함되어 있어, 코드가

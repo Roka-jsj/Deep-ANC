@@ -3,7 +3,7 @@
 
 규약: opset 17, 배치 1, 정적 shape, 상태 전부 명시 I/O, 블록 256(2프레임 내부 언롤).
 
-  python scripts/train/export_onnx.py --ckpt runs/pretrain_base/ckpt/best.pt \
+  .venv/bin/python scripts/train/export_onnx.py --ckpt runs/pretrain_base_corrected/ckpt/best.pt \
       --out runs/export/model.onnx
 """
 
@@ -22,6 +22,9 @@ from deep_anc.models.streaming import (                                   # noqa
     ExportWrapper,
     flatten_states,
     state_names,
+)
+from deep_anc.realtime.engines import (                                   # noqa: E402
+    checkpoint_digital_reference_lead_samples,
 )
 
 
@@ -89,6 +92,7 @@ def main() -> int:
 
     meta = {
         "model_name": model_cfg.get("name"),
+        "digital_reference_lead_samples": checkpoint_digital_reference_lead_samples(state),
         "block_samples": args.block,
         "hop": model.hop,
         "win": model.win,

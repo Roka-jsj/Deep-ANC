@@ -1,14 +1,14 @@
 # Stage-1 사전학습 (open-loop, 시뮬레이션 데이터) — Elice A100 기준
-# 실행: python scripts/train/train.py --config configs/train_pretrain.yaml
-# DDP:  torchrun --nproc_per_node=2 scripts/train/train.py --config configs/train_pretrain.yaml
+# 실행: .venv/bin/python scripts/train/train.py --config configs/train_pretrain.yaml
+# DDP:  .venv/bin/torchrun --nproc_per_node=2 scripts/train/train.py --config configs/train_pretrain.yaml
 
 stage: open_loop                # open_loop | closed_loop
 model_config: configs/model_base.yaml
 data_config: configs/data_sim.yaml
 duct_config: configs/duct.yaml
 
-batch_size: 24                  # A100 80GB bf16 기준. OOM 시 16, MIG 1g-10GB 디버깅은 4
-num_workers: 8
+batch_size: 96                  # A100 80GB base: 기존 24×400k와 같은 9.6M sample budget
+num_workers: 14                # 2모델 동시 실행 시 32 vCPU 중 모델별 14개
 prefetch_factor: 4
 
 optimizer:
@@ -18,26 +18,29 @@ optimizer:
   betas: [0.9, 0.999]
 
 schedule:
-  warmup_steps: 5000
-  total_steps: 400000
+  warmup_steps: 1250           # 96×1250 = 기존 24×5000 warmup sample 수
+  total_steps: 100000          # 96×100k = 기존 24×400k 총 sample 수
   min_lr: 1.0e-5
 
 amp: bf16
 grad_clip: 5.0
 
 loss:
+  # 실측 S(z) 유효대역 ∩ duct 목표대역(현재 150–600Hz) NMSE를 최소화.
+  # fullband NMSE는 do-no-harm 관측 지표로 별도 기록한다.
+  nmse_objective: trusted_band
   mrstft_ffts: [256, 512, 1024, 2048]
   lambda_mrstft: 1.0
   lambda_pow: 1.0e-3
   lambda_clip: 1.0
   clip_margin: 0.18
-  # 커리큘럼 A: 평면파 대역(80–1000Hz) ×3 가중. [교차검증 C3]
+  # 커리큘럼 A: duct.yaml 목표대역(80–800Hz) ×3 가중. [교차검증 C3]
   # 커리큘럼 B(풀밴드 균일)는 광대역 S(z) 재보정(coherence≥0.6) 통과 후에만 사용.
   band_weight: curriculum_a     # curriculum_a | fullband
 
-eval_every: 2000
+eval_every: 500                # 96×500 = 기존 24×2000 eval 간격
 log_every: 100
-early_stop_patience: 10         # eval 10회 연속 미개선 시 종료
-ckpt_dir: runs/pretrain_base
+early_stop_patience: 0          # 고정 val 16개가 약하므로 corrected pretrain은 완주
+ckpt_dir: runs/pretrain_base_corrected
 resume: null                    # 재개 시 ckpt 경로
 seed: 20260802

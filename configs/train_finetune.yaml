@@ -1,12 +1,34 @@
 # Stage-2/3 파인튜닝 — 실측 녹음 혼합 + (선택) closed-loop
-# 실행: python scripts/train/train.py --config configs/train_finetune.yaml
+# 실행: .venv/bin/python scripts/train/train.py --config configs/train_finetune.yaml
+# digital-ref는 data_sim의 +109를 그대로 쓰며 배포 runtime도 109로 맞춘다.
+# 기존 lead=0/무효 objective checkpoint는 init/resume에 사용하지 않는다.
 
 stage: open_loop                # 1차 파인튜닝은 open_loop, 이후 closed_loop 로 변경
 model_config: configs/model_base.yaml
 data_config: configs/data_sim.yaml
 duct_config: configs/duct.yaml
 
-init_ckpt: runs/pretrain_base/ckpt/best.pt
+# 실측 세션 파인튜닝이 surrogate P(z)로 조용히 실행되는 사고를 막는다.
+# duct.digital_reference.primary_path_npz를 채우고 실행 시
+# `--set data.digital_primary_path_mode=measured`를 반드시 함께 지정한다.
+require_measured_primary_path: true
+require_init_checkpoint: true
+require_recorded_manifest: true
+
+# scripts/train/check_finetune.py와 train.py가 공용하는 실패-폐쇄 진입 기준.
+# 실제 official P/S와 recorded 데이터가 없으면 어떤 항목도 우회하지 않는다.
+readiness:
+  required_path_band_hz: [80, 1600]
+  min_path_consistency: 0.9
+  required_recorded_ratio: 0.7
+  min_recorded_sessions: 80
+  min_recorded_duration_seconds: 5400   # 1.5시간; 권장 수집량은 3–4시간
+  required_source_families: [speech, music, environment, machine]
+  require_completed_init_checkpoint: true
+  max_init_best_metric_db: 0.0
+  allowed_init_physics_statuses: [secondary_surrogate_representation_pretrain]
+
+init_ckpt: runs/pretrain_base_corrected/ckpt/best.pt
 
 recorded_manifest: data/manifests/recorded_train.jsonl
 recorded_ratio: 0.7             # 실측:합성 = 7:3 혼합 배치
@@ -31,6 +53,9 @@ grad_clip: 5.0
 freeze_encoder: false           # 데이터가 적으면 true 시도
 
 loss:
+  # 실측 S(z) 유효대역 ∩ duct 목표대역 NMSE를 최소화.
+  # fullband NMSE는 do-no-harm 관측 지표로 별도 기록한다.
+  nmse_objective: trusted_band
   mrstft_ffts: [256, 512, 1024, 2048]
   lambda_mrstft: 1.0
   lambda_pow: 1.0e-3
@@ -40,7 +65,9 @@ loss:
 
 eval_every: 1000
 log_every: 100
-early_stop_patience: 10
+# Trainer의 내장 val은 합성 16개뿐이라 실측 fine-tune 종료 권한으로 쓰지 않는다.
+# 예정 step을 끝낸 뒤 독립 recorded val/test G4로 checkpoint를 판정한다.
+early_stop_patience: 0
 ckpt_dir: runs/finetune_base
 resume: null
 seed: 20260803

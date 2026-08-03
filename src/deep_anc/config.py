@@ -91,9 +91,15 @@ def load_train_config(path: str | Path, overrides: list[str] | None = None) -> d
 def load_runtime_config(path: str | Path, overrides: list[str] | None = None) -> dict:
     cfg = load_yaml(path)
     if overrides:
+        # 참조 경로 자체(hardware_config/duct_config)를 바꿀 수 있도록 먼저 적용한다.
         cfg = apply_overrides(cfg, overrides)
     cfg["hardware"] = load_yaml(cfg["hardware_config"])
     cfg["duct"] = load_yaml(cfg["duct_config"])
+    if overrides:
+        # 로드된 하위 설정도 CLI에서 재현 가능하게 바꿀 수 있어야 한다.
+        # 이 두 번째 적용이 없으면 ``--set hardware.audio.block_size=512`` 같은
+        # 런타임 조정은 위의 참조 파일 로드에서 조용히 사라진다.
+        cfg = apply_overrides(cfg, overrides)
     return cfg
 
 

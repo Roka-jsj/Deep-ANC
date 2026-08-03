@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import os
 import time
+import copy
 from pathlib import Path
 
 import torch
@@ -23,7 +24,7 @@ from ..data.recorded_dataset import RecordedANCDataset
 from ..data.synth_dataset import SynthANCDataset, make_eval_batch
 from ..dsp.nonlinear import RandomNonlinear
 from ..dsp.secondary_path import DifferentiableSecondaryPath, load_secondary_path
-from ..losses import ANCLoss
+from ..losses import ANCLoss, intersect_frequency_bands
 from ..models import build_model
 from .checkpoint import load_checkpoint, save_checkpoint
 from .reproducibility import set_seed, snapshot_run
@@ -34,6 +35,87 @@ def _ddp_env() -> tuple[int, int, int]:
     world = int(os.environ.get("WORLD_SIZE", 1))
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     return rank, world, local_rank
+
+
+def validate_training_physics(cfg: dict) -> str:
+    """학습 단계가 요구하는 P(z) 물리 수준을 검사하고 상태 라벨을 반환."""
+    data_cfg = cfg.get("data", {})
+    reference = str(data_cfg.get("reference_mode", "digital"))
+    primary_mode = str(data_cfg.get("digital_primary_path_mode", "rir_surrogate"))
+    if (
+        bool(cfg.get("require_measured_primary_path", False))
+        and reference == "digital"
+        and primary_mode != "measured"
+    ):
+        raise ValueError(
+            "이 학습 설정은 실측 P(z)가 필수입니다. "
+            "data.digital_primary_path_mode=measured와 "
+            "duct.digital_reference.primary_path_npz를 지정하세요."
+        )
+    if reference != "digital":
+        return "acoustic_rir_training"
+    if primary_mode == "measured":
+        return "measured_primary_path"
+    return f"{primary_mode}_representation_pretrain"
+
+
+def checkpoint_training_lead(state: dict) -> int:
+    """체크포인트 학습 lead를 읽는다. 메타 없는 legacy artifact는 0."""
+    saved_cfg = state.get("cfg", {}) or {}
+    if "digital_reference_lead_samples" in saved_cfg:
+        return int(saved_cfg["digital_reference_lead_samples"])
+    return int((saved_cfg.get("data", {}) or {}).get("digital_reference_lead_samples", 0))
+
+
+def validate_resume_physics(state: dict, cfg: dict) -> None:
+    """재개 체크포인트와 현재 학습의 지연/물리 모드가 같은지 검사한다.
+
+    ``init_ckpt``는 surrogate 사전학습에서 measured 파인튜닝으로 가중치만
+    옮기는 용도라 물리 모드가 달라도 된다. 반면 ``resume``은 옵티마이저와
+    스케줄러 상태까지 이어받으므로 동일 실험이어야 한다.
+    """
+    expected_lead = int(cfg.get("data", {}).get("digital_reference_lead_samples", 0))
+    saved_lead = checkpoint_training_lead(state)
+    if saved_lead != expected_lead:
+        raise ValueError(
+            "resume checkpoint digital-reference lead 불일치: "
+            f"checkpoint={saved_lead}, training={expected_lead}"
+        )
+
+    saved_cfg = state.get("cfg", {}) or {}
+    expected_status = validate_training_physics(cfg)
+    saved_status = saved_cfg.get("physics_status")
+    if saved_status is None and "data" in saved_cfg:
+        saved_status = validate_training_physics(saved_cfg)
+    if saved_status is None:
+        raise ValueError(
+            "resume checkpoint에 physics_status/resolved data 설정이 없습니다. "
+            "물리 정합을 검증할 수 없는 legacy artifact는 가중치 초기화에만 사용하세요."
+        )
+    if str(saved_status) != expected_status:
+        raise ValueError(
+            "resume checkpoint physics mode 불일치: "
+            f"checkpoint={saved_status}, training={expected_status}"
+        )
+
+
+def resolve_run_until_step(cfg: dict, schedule_total_steps: int) -> int:
+    """스케줄은 유지한 채 이번 프로세스가 멈출 step을 검증한다.
+
+    구조 탐색은 100k cosine 스케줄의 동일한 초반 20k 곡선을 비교해야 한다.
+    ``schedule.total_steps``를 20k로 줄이면 LR 궤적 자체가 달라지므로 별도
+    ``run_until_step``에서 안전하게 구간 checkpoint를 만든다.
+    """
+    total = int(schedule_total_steps)
+    stop = int(cfg.get("run_until_step", total))
+    if total < 1:
+        raise ValueError("schedule.total_steps는 1 이상이어야 합니다")
+    if not 1 <= stop <= total:
+        raise ValueError(
+            f"run_until_step은 1 이상 schedule.total_steps({total}) 이하여야 합니다: "
+            f"{stop}"
+        )
+    return stop
 
 
 class MixedIterator:
@@ -59,6 +141,7 @@ class MixedIterator:
 class Trainer:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
+        self.physics_status = validate_training_physics(cfg)
         self.rank, self.world, self.local_rank = _ddp_env()
         self.is_main = self.rank == 0
         if self.world > 1 and not dist.is_initialized():
@@ -119,9 +202,28 @@ class Trainer:
         acoustics = duct.get("acoustics", {})
         cutoff = float(acoustics.get("plane_wave_cutoff_hz", 1633.0))
         target_band = tuple(acoustics.get("realistic_target_band_hz", [80.0, 1000.0]))
+        self.trusted_band_hz = intersect_frequency_bands(
+            tuple(sp.excitation_band_hz),
+            target_band,
+            self.fs / 2.0,
+        )
+        if self.is_main:
+            print(
+                "[trainer] NMSE trusted band: "
+                f"{self.trusted_band_hz[0]:.0f}–{self.trusted_band_hz[1]:.0f}Hz "
+                f"(S 실측 {sp.excitation_band_hz[0]:.0f}–{sp.excitation_band_hz[1]:.0f}Hz "
+                f"∩ 목표 {target_band[0]:.0f}–{target_band[1]:.0f}Hz)"
+            )
+            print(f"[trainer] physics status: {self.physics_status}")
+            if self.physics_status.endswith("_representation_pretrain"):
+                print(
+                    "[trainer 경고] surrogate P(z) 표현 사전학습입니다 — "
+                    "실측 덕트 감쇠 성능으로 해석하지 마세요."
+                )
         self.criterion = ANCLoss(
             plant, cfg["loss"], self.fs, nonlinear=nonlinear,
             cutoff_hz=cutoff, target_band_hz=target_band,
+            trusted_band_hz=self.trusted_band_hz,
         ).to(self.device)
 
         # 헤드룸 정합: 손실 클립 마진 < 모델 소프트리미터 한계 (감사 L8)
@@ -137,7 +239,15 @@ class Trainer:
         # 비-synthetic 태그의 manifest 존재를 명시 검사 — 조용한 합성 폴백으로
         # 학습 분포가 바뀌는 사고 방지 (감사 M1). 부재 태그는 배너로 알린다.
         if self.is_main:
-            mix = cfg["data"].get("source_mix_ratio", {})
+            data_cfg = cfg["data"]
+            use_acoustic_mix = (
+                data_cfg.get("reference_mode") == "acoustic"
+                and data_cfg.get("source_mix_ratio_acoustic")
+            )
+            mix = data_cfg.get(
+                "source_mix_ratio_acoustic" if use_acoustic_mix else "source_mix_ratio",
+                {},
+            )
             mdir = Path(cfg["data"].get("noise_manifest_dir", "data/manifests"))
             if not mdir.is_absolute():
                 mdir = REPO_ROOT / mdir
@@ -165,8 +275,19 @@ class Trainer:
         self.train_iter = iter(loader)
 
         recorded_manifest = cfg.get("recorded_manifest")
+        recorded_required = bool(cfg.get("require_recorded_manifest", False))
+        if recorded_required and not recorded_manifest:
+            raise ValueError(
+                "이 학습 설정은 recorded_manifest가 필수입니다. "
+                "실측 train/val/test 매니페스트를 지정하세요."
+            )
         if recorded_manifest and not Path(recorded_manifest).is_absolute():
             recorded_manifest = str(REPO_ROOT / recorded_manifest)
+        if recorded_required and not Path(recorded_manifest).exists():
+            raise FileNotFoundError(
+                "이 학습 설정은 유효한 recorded_manifest가 필수입니다: "
+                f"{recorded_manifest}"
+            )
         if recorded_manifest and Path(recorded_manifest).exists():
             rec = RecordedANCDataset(recorded_manifest, cfg["data"], split="train", seed=seed + 5)
             rec_loader = DataLoader(
@@ -206,6 +327,7 @@ class Trainer:
 
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
         self.total_steps = total
+        self.run_until_step = resolve_run_until_step(cfg, total)
         self.grad_clip = float(cfg.get("grad_clip", 0.0))
         self.amp_dtype = torch.bfloat16 if cfg.get("amp") == "bf16" else None
 
@@ -219,7 +341,10 @@ class Trainer:
         self.best_metric = float("inf")
         self.writer = None
         if self.is_main:
-            snapshot_run(self.run_dir, {k: v for k, v in cfg.items() if k not in ("model", "data", "duct")})
+            # resolved model/data/duct까지 전부 남겨야 surrogate/실측 P(z), lead,
+            # plant curriculum을 나중에 정확히 구분할 수 있다. 비밀정보는 학습
+            # config에 두지 않는 저장소 규약을 따른다.
+            snapshot_run(self.run_dir, cfg_snapshot(cfg, self.trusted_band_hz))
             try:
                 from torch.utils.tensorboard import SummaryWriter
 
@@ -230,20 +355,50 @@ class Trainer:
 
         # init_ckpt(파인튜닝) → resume(재개) 순서로 적용 (상대경로는 저장소 루트 기준)
         def _abs(p):
-            return str(p) if p is None or Path(p).is_absolute() else str(REPO_ROOT / p)
+            if p is None:
+                return None
+            return str(p) if Path(p).is_absolute() else str(REPO_ROOT / p)
 
         init_ckpt = _abs(cfg.get("init_ckpt"))
+        init_required = bool(cfg.get("require_init_checkpoint", False))
+        if init_required and (not init_ckpt or not Path(init_ckpt).exists()):
+            raise FileNotFoundError(
+                f"이 학습 설정은 유효한 init_ckpt가 필수입니다: {init_ckpt}"
+            )
         if cfg.get("init_ckpt") and not Path(init_ckpt).exists() and self.is_main:
             print(f"[trainer] 경고: init_ckpt({init_ckpt})가 없어 무시합니다")
         if init_ckpt and Path(init_ckpt).exists():
             state = load_checkpoint(init_ckpt, self.model, restore_rng=False, map_location="cpu")
+            expected_lead = int(cfg["data"].get("digital_reference_lead_samples", 0))
+            saved_lead = checkpoint_training_lead(state)
+            if saved_lead != expected_lead:
+                raise ValueError(
+                    "init checkpoint digital-reference lead 불일치: "
+                    f"checkpoint={saved_lead}, training={expected_lead}"
+                )
             if self.is_main:
                 print(f"[trainer] init_ckpt 로드: {init_ckpt} (step {state.get('step')})")
         resume = _abs(cfg.get("resume"))
         if resume and Path(resume).exists():
             state = load_checkpoint(resume, self.model, self.optimizer, self.scheduler, map_location="cpu")
+            validate_resume_physics(state, cfg)
             self.step = int(state.get("step", 0))
             self.best_metric = float(state.get("best_metric", float("inf")))
+            # 구버전 last.pt는 eval에서 best 갱신 직전에 저장되어 best_metric이
+            # 한 회 늦을 수 있다. 같은 run의 best.pt가 있으면 더 좋은 값을 authority로
+            # 사용해 재개 직후 나쁜 val이 best.pt를 덮어쓰지 못하게 한다.
+            best_path = self.run_dir / "ckpt" / "best.pt"
+            if best_path.exists():
+                try:
+                    best_state = torch.load(
+                        best_path, map_location="cpu", weights_only=False
+                    )
+                    self.best_metric = min(
+                        self.best_metric,
+                        float(best_state.get("best_metric", float("inf"))),
+                    )
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    pass
             if self.is_main:
                 print(f"[trainer] 재개: step {self.step}, best {self.best_metric:.3f}")
 
@@ -310,7 +465,7 @@ class Trainer:
         # 절단은 손실 내부에서 플랜트 적용 "후"에 수행 (결함 #2/#5)
         return self.criterion(y, d, loss_start_sample=skip, perturb=perturb, nl_params=nl_params)
 
-    def _validate(self) -> float:
+    def _validate_metrics(self) -> dict[str, float]:
         self.model.eval()
         self.criterion.eval()
         with torch.no_grad():
@@ -321,7 +476,11 @@ class Trainer:
             _, metrics = self.criterion(y, d)
         self.model.train()
         self.criterion.train()
-        return metrics["nmse_db"]
+        return metrics
+
+    def _validate(self) -> float:
+        """기존 호출 호환용 단일 값 검증 API — trusted-band NMSE를 반환."""
+        return self._validate_metrics()["nmse_trusted_db"]
 
     # ---------- 메인 루프 ----------
 
@@ -335,7 +494,7 @@ class Trainer:
         self.criterion.train()
         t0 = time.time()
 
-        while self.step < self.total_steps:
+        while self.step < self.run_until_step:
             batch = next(self.train_iter)
             self.optimizer.zero_grad(set_to_none=True)
 
@@ -358,7 +517,9 @@ class Trainer:
                 t0 = time.time()
                 line = (
                     f"step {self.step:7d} | loss {metrics['loss']:8.3f} | "
-                    f"nmse {metrics['nmse_db']:7.2f} dB | lr {lr:.2e} | {sps:5.2f} it/s"
+                    f"nmse_t {metrics['nmse_trusted_db']:7.2f} dB | "
+                    f"nmse_f {metrics['nmse_fullband_db']:7.2f} dB | "
+                    f"lr {lr:.2e} | {sps:5.2f} it/s"
                 )
                 print(line, flush=True)
                 if self.loss_log:
@@ -370,28 +531,46 @@ class Trainer:
                     self.writer.add_scalar("train/lr", lr, self.step)
 
             if self.step % eval_every == 0:
-                val_nmse = self._validate()
+                val_metrics = self._validate_metrics()
+                val_nmse = val_metrics["nmse_trusted_db"]
+                val_fullband_nmse = val_metrics["nmse_fullband_db"]
                 stop_flag = torch.zeros(1, device=self.device)
                 if self.is_main:
-                    print(f"[eval] step {self.step}: val NMSE {val_nmse:.2f} dB", flush=True)
+                    print(
+                        f"[eval] step {self.step}: val trusted NMSE {val_nmse:.2f} dB | "
+                        f"fullband NMSE {val_fullband_nmse:.2f} dB",
+                        flush=True,
+                    )
                     if self.writer:
+                        # 기존 대시보드의 val/nmse_db는 trusted 목적함수 alias로 유지.
                         self.writer.add_scalar("val/nmse_db", val_nmse, self.step)
+                        self.writer.add_scalar("val/nmse_trusted_db", val_nmse, self.step)
+                        self.writer.add_scalar(
+                            "val/nmse_fullband_db", val_fullband_nmse, self.step
+                        )
+                    is_best = val_nmse < self.best_metric
+                    if is_best:
+                        self.best_metric = val_nmse
+                        bad_evals = 0
+                    else:
+                        bad_evals += 1
+
+                    # last.pt에도 이번 eval까지 반영된 best_metric을 기록한다.
                     save_checkpoint(
                         self.run_dir / "ckpt" / "last.pt",
                         self.model, self.optimizer, self.scheduler,
-                        self.step, self.best_metric, cfg_snapshot(cfg),
+                        self.step, self.best_metric,
+                        cfg_snapshot(cfg, self.trusted_band_hz),
                     )
-                    if val_nmse < self.best_metric:
-                        self.best_metric = val_nmse
-                        bad_evals = 0
+                    if is_best:
                         save_checkpoint(
                             self.run_dir / "ckpt" / "best.pt",
                             self.model, self.optimizer, self.scheduler,
-                            self.step, self.best_metric, cfg_snapshot(cfg),
+                            self.step, self.best_metric,
+                            cfg_snapshot(cfg, self.trusted_band_hz),
                         )
                         print(f"[eval] best 갱신 → {val_nmse:.2f} dB", flush=True)
                     else:
-                        bad_evals += 1
                         if patience and bad_evals >= patience:
                             print(f"[eval] {patience}회 연속 미개선 — 조기 종료", flush=True)
                             stop_flag.fill_(1.0)
@@ -405,18 +584,32 @@ class Trainer:
             save_checkpoint(
                 self.run_dir / "ckpt" / "last.pt",
                 self.model, self.optimizer, self.scheduler,
-                self.step, self.best_metric, cfg_snapshot(cfg),
+                self.step, self.best_metric,
+                cfg_snapshot(cfg, self.trusted_band_hz),
             )
-            print(f"학습 종료: step {self.step}, best val NMSE {self.best_metric:.2f} dB")
+            print(
+                f"학습 구간 종료: step {self.step}/{self.total_steps}, "
+                f"best trusted val NMSE {self.best_metric:.2f} dB"
+            )
         if self.world > 1:
             dist.destroy_process_group()
 
 
-def cfg_snapshot(cfg: dict) -> dict:
-    """체크포인트에 저장할 설정 (모델 재구성에 필요한 부분 포함)."""
-    return {
-        "model": cfg["model"],
-        "stage": cfg.get("stage"),
-        "loss": cfg.get("loss"),
-        "sample_rate": cfg["data"]["sample_rate"],
-    }
+def cfg_snapshot(
+    cfg: dict,
+    trusted_band_hz: tuple[float, float] | None = None,
+) -> dict:
+    """체크포인트/실행 폴더에 남길 완전한 resolved 설정.
+
+    과거에는 모델과 몇 개 필드만 저장해 P/S 경로·증강·소스 분포를 복원할 수
+    없었다. 학습 입력 설정 전체를 보존하고, 배포가 즉시 검사할 lead alias와
+    물리 유효성 라벨을 최상위에도 명시한다.
+    """
+    out = copy.deepcopy(cfg)
+    data_cfg = out.get("data", {})
+    lead = int(data_cfg.get("digital_reference_lead_samples", 0))
+    out["digital_reference_lead_samples"] = lead
+    out["physics_status"] = validate_training_physics(out)
+    if trusted_band_hz is not None:
+        out["trusted_band_hz"] = [float(v) for v in trusted_band_hz]
+    return out

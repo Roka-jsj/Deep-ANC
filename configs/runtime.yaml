@@ -8,9 +8,15 @@ hop: 256                        # 엔진 스텝 샘플 수 = 콜백 블록. 모�
 reference: digital              # digital | mic  (ch1 레퍼런스 마이크 수리 확인 전 digital 기본)
 controller: dl                  # dl | fxlms
 
+# 소음 ch0 재생을 지연시켜 모델에 자기생성 소스를 이만큼 먼저 제공한다.
+# 기존 무효 checkpoint와 아직 모델을 지정하지 않은 기본 runtime은 0. corrected Stage-1/
+# 파인튜닝 checkpoint를 배포할 때 109로 바꾸며 acoustic reference에서는 반드시 0이다.
+# checkpoint/ONNX 메타와 다르면 오디오 시작 전에 거부한다(메타 없는 legacy artifact=0).
+digital_reference_lead_samples: 0
+
 engine:
   type: torch                   # torch | ort | trt  (개발→검증→배포 순 마이그레이션)
-  ckpt: runs/pretrain_base/ckpt/best.pt        # torch 엔진용 (모델 구조는 ckpt 내장 cfg 사용)
+  ckpt: runs/pretrain_base_corrected/ckpt/best.pt  # torch 엔진용 (모델 구조는 ckpt 내장 cfg 사용)
   onnx: runs/export/model.onnx                 # ort 엔진용
   plan: runs/export/model_fp16.plan            # trt 엔진용
   cpu_affinity: [4, 5, 6, 7]    # 추론 스레드 CPU 소프트 고정
@@ -41,4 +47,4 @@ noise:                          # ch0 소음 스피커 프로그램
 
 record: null                    # 세션 녹음 저장 경로 (예: results/demo_0803)
 run_seconds: 0.0                # 0 = Q 키까지 실행
-start_on: false                 # 안전을 위해 항상 ANC OFF로 시작
+start_on: false                 # 안전 불변식: true는 런타임이 거부하며 항상 ANC OFF로 시작
