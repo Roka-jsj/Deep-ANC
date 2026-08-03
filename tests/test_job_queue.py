@@ -147,6 +147,69 @@ def test_failed_dependency_skips_dependent_job(tmp_path):
     assert supervisor.results["tail"]["state"] == "succeeded"
 
 
+def test_restart_does_not_rerun_completed_jobs(tmp_path):
+    """재기동이 완료된 작업을 다시 돌리면 시간 낭비를 넘어 **파괴적**이다.
+
+    실제로 20k 를 완주한 대조군을 재실행해 checkpoint 를 덮어쓸 뻔했다(step 500 직전 차단).
+    """
+
+    counter = tmp_path / "runs.txt"
+    job = {
+        "id": "once",
+        "kind": "shell",
+        "command": ["/bin/sh", "-c", f"echo x >> {counter}"],
+        "on_failure": "continue",
+    }
+    first = _spec(tmp_path, [job])
+    supervisor = _supervisor(first)
+    supervisor.run()
+    assert counter.read_text().count("x") == 1
+
+    # 새 감독자 인스턴스 = 재기동. 상태 파일에서 결과를 복원해야 한다.
+    second = _supervisor(_spec(tmp_path, [job]))
+    second.run()
+    assert counter.read_text().count("x") == 1, "완료된 작업이 재실행됐다"
+    assert second.results["once"]["state"] == "succeeded"
+
+
+def test_completed_train_run_on_disk_is_skipped(tmp_path, monkeypatch):
+    """상태 파일이 유실돼도 디스크가 완료를 증명하면 학습을 다시 시작하지 않는다."""
+
+    spec = _spec(
+        tmp_path,
+        [{
+            "id": "pilot", "kind": "train", "ckpt_dir": "runs/pilot",
+            "expect": {"step": 20000},
+        }],
+    )
+    supervisor = _supervisor(spec)
+    monkeypatch.setattr(
+        supervisor, "verify_run",
+        lambda job_id, ckpt_dir, expect: {
+            "id": job_id, "state": "succeeded", "detail": "검증 통과",
+            "checkpoint": {"step": 20000},
+        },
+    )
+
+    def _fail(*_a, **_k):
+        raise AssertionError("완료된 학습을 다시 spawn 했다")
+
+    monkeypatch.setattr(supervisor, "spawn", _fail)
+    result = supervisor.run_job(spec.jobs[0])
+    assert result["state"] == "already_done"
+
+
+def test_already_done_satisfies_dependencies(tmp_path):
+    spec = _spec(
+        tmp_path,
+        [{"id": "a", "kind": "shell", "command": ["true"]},
+         {**_shell("b", 0), "depends_on": ["a"]}],
+    )
+    supervisor = _supervisor(spec)
+    supervisor.results["a"] = {"id": "a", "state": "already_done", "detail": ""}
+    assert supervisor.next_job().id == "b"
+
+
 def test_classify_failure_reads_log_tail(tmp_path):
     log = tmp_path / "job.log"
     log.write_text("step 1\nCUDA out of memory\n", encoding="utf-8")
@@ -500,6 +563,54 @@ def test_metrics_markdown_parser_matches_real_output():
     assert "speech" in parsed["per_source_db"]
     assert "125" not in parsed["per_source_db"]  # 밴드 행이 소스로 새면 안 된다
     assert len(parsed["bands"]) == 7
+
+
+def test_config_fingerprint_ignores_architecture_but_catches_drift(tmp_path):
+    """구조는 실험의 독립변수다 — 지문이 이걸로 갈리면 구조 탐색이 불가능해진다.
+
+    실제로 첫 승자 선정에서 후보 3종이 전부 이 오탐으로 실격됐다.
+    """
+
+    import yaml
+
+    from deep_anc.ops.structure_select import config_fingerprint
+
+    base = {
+        "batch_size": 128,
+        "schedule": {"total_steps": 100000, "warmup_steps": 1250},
+        "data": {"reference_mode": "digital"},
+        "loss": {"nmse_objective": "trusted_band"},
+    }
+
+    def _write(name, extra):
+        run = tmp_path / name
+        run.mkdir()
+        (run / "config_snapshot.yaml").write_text(
+            yaml.safe_dump({**base, **extra}, allow_unicode=True), encoding="utf-8"
+        )
+        return run
+
+    control = _write("control", {
+        "ckpt_dir": "runs/search_tiny_control",
+        "model_config": "configs/model_tiny.yaml",
+        "model": {"name": "hybrid_anc_tiny"},
+        "seed": 20260802,
+    })
+    variant = _write("variant", {
+        "ckpt_dir": "runs/search_tiny_attn",
+        "model_config": "configs/model_tiny_attn.yaml",
+        "model": {"name": "hybrid_anc_tiny_attn"},
+        "seed": 20260802,
+    })
+    drifted = _write("drifted", {
+        "ckpt_dir": "runs/search_other",
+        "model_config": "configs/model_tiny.yaml",
+        "model": {"name": "hybrid_anc_tiny"},
+        "batch_size": 96,  # 비교 가능성을 깨는 진짜 드리프트
+    })
+
+    assert config_fingerprint(control) == config_fingerprint(variant)
+    assert config_fingerprint(control) != config_fingerprint(drifted)
 
 
 def test_bootstrap_ci_is_deterministic_and_detects_shift():

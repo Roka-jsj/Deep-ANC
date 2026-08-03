@@ -138,3 +138,100 @@ jobs:
         on_failure: retry_then_continue
         max_retries: 1
     on_failure: continue
+
+  # ── 1차 선정의 오탐 교정 ────────────────────────────────────────────────
+  # 첫 선정에서 후보 3종이 전부 "config fingerprint 불일치"로 실격됐다. 지문이
+  # model/model_config 를 포함해서 생긴 오탐이며, 구조는 실험의 독립변수다.
+  # 지문을 고친 뒤 같은 데이터로 다시 판정해 기록을 바로잡는다(CPU 수초).
+  - id: reselect_structure_winner
+    kind: decision
+    tier: A
+    reason: "지문 오탐 교정 후 재판정 — 결론이 '실격'이 아니라 '유의한 개선 없음'인지 확인"
+    depends_on: [search_tiny_control, adopt_tiny_long, adopt_tiny_attn, adopt_tiny_long_attn]
+    decision:
+      control:
+        {name: tiny_control, run_dir: runs/search_tiny_control,
+         model_config: configs/model_tiny.yaml}
+      candidates:
+        - {name: tiny_long, run_dir: runs/search_tiny_long,
+           model_config: configs/model_tiny_long.yaml}
+        - {name: tiny_attn, run_dir: runs/search_tiny_attn,
+           model_config: configs/model_tiny_attn.yaml}
+        - {name: tiny_long_attn, run_dir: runs/search_tiny_long_attn,
+           model_config: configs/model_tiny_long_attn.yaml}
+      primary_eval: eval_pilot_last
+      confirm_eval: eval_pilot_best
+      margin_db: 0.30
+      worsening_tolerance_db: 1.0
+    on_failure: continue
+
+  # ── seed 반복 ───────────────────────────────────────────────────────────
+  # 승자 선정의 신뢰구간은 평가 아이템 간 분산만 덮고 run 간(seed) 분산은 덮지 않는다.
+  # tiny_long 은 Δ −0.224, CI [−0.709, +0.255] 로 정확히 그 한계에 걸린 후보다.
+  # 대조군과 짝을 맞춰 반복해야 paired Δ 의 seed 분산을 실측할 수 있다.
+  - id: seed_repeat_control_20k
+    kind: train
+    tier: B
+    compare: true
+    reason: "대조군 seed 반복 — 구조 비교의 run 간 분산 실측"
+    config: configs/train_pretrain.yaml
+    model_config: configs/model_tiny.yaml
+    ckpt_dir: runs/seed_repeat_tiny_control
+    overrides:
+      batch_size: 128
+      num_workers: 14
+      prefetch_factor: 4
+      schedule.total_steps: 100000
+      schedule.warmup_steps: 1250
+      run_until_step: 20000
+      eval_every: 500
+      early_stop_patience: 0
+      seed: 20260902
+    expect: {step: 20000, model_name: hybrid_anc_tiny, total_steps: 100000}
+    post_eval:
+      - {ckpt: best, n_items: 32, out: eval_pilot_best}
+      - {ckpt: last, n_items: 32, out: eval_pilot_last}
+    on_failure: continue
+
+  - id: seed_repeat_tiny_long_20k
+    kind: train
+    tier: B
+    compare: true
+    reason: "유일하게 대조군과 대등했던 후보의 seed 반복"
+    config: configs/train_pretrain.yaml
+    model_config: configs/model_tiny_long.yaml
+    ckpt_dir: runs/seed_repeat_tiny_long
+    overrides:
+      batch_size: 128
+      num_workers: 14
+      prefetch_factor: 4
+      schedule.total_steps: 100000
+      schedule.warmup_steps: 1250
+      run_until_step: 20000
+      eval_every: 500
+      early_stop_patience: 0
+      seed: 20260902
+    expect: {step: 20000, model_name: hybrid_anc_tiny_long, total_steps: 100000}
+    post_eval:
+      - {ckpt: best, n_items: 32, out: eval_pilot_best}
+      - {ckpt: last, n_items: 32, out: eval_pilot_last}
+    on_failure: continue
+
+  # 다른 seed 에서도 같은 결론이 나오는지 — 재현되면 "tiny 로 충분하다"가 확정된다.
+  - id: decide_seed_repeat
+    kind: decision
+    tier: B
+    reason: "seed 20260902 에서 tiny_long 이 대조군을 이기는지 재현 검사"
+    depends_on: [seed_repeat_control_20k, seed_repeat_tiny_long_20k]
+    decision:
+      control:
+        {name: tiny_control_seed2, run_dir: runs/seed_repeat_tiny_control,
+         model_config: configs/model_tiny.yaml}
+      candidates:
+        - {name: tiny_long_seed2, run_dir: runs/seed_repeat_tiny_long,
+           model_config: configs/model_tiny_long.yaml}
+      primary_eval: eval_pilot_last
+      confirm_eval: eval_pilot_best
+      margin_db: 0.30
+      worsening_tolerance_db: 1.0
+    on_failure: continue

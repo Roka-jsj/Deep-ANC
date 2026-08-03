@@ -64,7 +64,12 @@ def render(payload: dict) -> str:
             lines.append(f"## {name}: {status['error']}")
             continue
         age = _age_seconds(status.get("generated_at_utc"))
-        stale = age is not None and age > STALE_MULTIPLIER * DEFAULT_INTERVAL_SECONDS
+        # 감독자가 실제로 쓰는 주기를 기준으로 판정한다. drained 상태에서는 300초마다
+        # 쓰므로 30초 고정 기준으로 보면 정상인데도 항상 STALE 로 보인다.
+        interval = status.get("status_interval_seconds") or DEFAULT_INTERVAL_SECONDS
+        if status.get("state") == "drained":
+            interval = status.get("drained_poll_seconds") or interval
+        stale = age is not None and age > STALE_MULTIPLIER * max(float(interval), 5.0)
         badge = "  [STALE — 감독자가 죽었을 수 있음]" if stale else ""
         lines.append(
             f"## {name} — state={status.get('state')} "

@@ -39,7 +39,20 @@ _SOURCE_ROW = re.compile(r"^\|\s*([A-Za-z0-9_]+)\s*\|\s*([+-]?[\d.]+)\s*\|")
 _BAND_SECTION = "## 기능1"
 _SOURCE_SECTION = "## 기능2"
 
-VOLATILE_CONFIG_KEYS = ("ckpt_dir", "resume", "run_until_step", "seed")
+# 지문에서 빼야 하는 키.
+#   - 휘발성(ckpt_dir/resume/run_until_step/seed): 같은 실험이라도 매번 다르다.
+#   - **구조(model/model_config): 이것이 바로 실험의 독립변수다.** 여기를 빼지 않으면
+#     구조가 다른 후보는 항상 지문 불일치로 실격돼 구조 탐색 자체가 불가능해진다.
+#     (실제로 첫 선정에서 후보 3종이 전부 이 오탐으로 실격됐다.)
+# 지문의 목적은 코드·데이터·손실·스케줄이 후보 간에 같은지 확인하는 것이다.
+VOLATILE_CONFIG_KEYS = (
+    "ckpt_dir",
+    "resume",
+    "run_until_step",
+    "seed",
+    "model",
+    "model_config",
+)
 
 
 def _abs(value: str | Path) -> Path:
@@ -106,11 +119,11 @@ def parse_metrics_markdown(path: str | Path) -> dict:
 
 
 def config_fingerprint(run_dir: str | Path) -> str | None:
-    """실험 간 코드/설정 동일성 지문.
+    """후보 간 **비교 가능성** 지문 — 구조를 제외한 나머지가 같은지 본다.
 
-    ``config_snapshot.yaml`` 에서 휘발성 키(ckpt_dir/resume/run_until_step/seed)를 뺀
-    뒤 SHA-256 을 낸다. 후보끼리 지문이 다르면 같은 조건에서 비교한 것이 아니므로
-    실격시킨다.
+    데이터·손실·스케줄·옵티마이저·플랜트가 후보마다 다르면 20k 결과를 나란히 놓을 수
+    없다. 반대로 ``model``/``model_config`` 는 실험이 일부러 바꾸는 축이므로 지문에서
+    제외한다(§VOLATILE_CONFIG_KEYS 주석 참조).
     """
 
     import hashlib  # noqa: PLC0415
@@ -130,6 +143,16 @@ def config_fingerprint(run_dir: str | Path) -> str | None:
         cfg.pop(key, None)
     payload = json.dumps(cfg, ensure_ascii=False, sort_keys=True, default=str)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def code_revision(run_dir: str | Path) -> str | None:
+    """run 이 어느 코드 리비전에서 돌았는지(``git_rev.txt``). 코드 드리프트 감지용."""
+
+    path = _abs(run_dir) / "git_rev.txt"
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
 
 
 def bootstrap_ci(
@@ -200,6 +223,7 @@ def evaluate_candidate(
         "disqualified": False,
         "reasons": [],
         "config_fingerprint": config_fingerprint(run_dir),
+        "code_revision": code_revision(run_dir),
     }
 
     candidate_items = _per_item(metrics["npz"], "per_item_trusted_db")

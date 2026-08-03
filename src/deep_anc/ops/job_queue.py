@@ -910,9 +910,44 @@ class Supervisor:
 
     # -- 작업 실행 ---------------------------------------------------------
 
+    def restore_results(self) -> None:
+        """이전 감독자가 남긴 작업 결과를 불러온다.
+
+        결과를 메모리에만 두면 재기동할 때마다 완료된 작업을 처음부터 다시 돌린다.
+        실제로 완주한 20k 대조군을 재실행해 checkpoint 를 덮어쓸 뻔했다(step 500 직전에
+        차단). ``running`` 처럼 종료되지 않은 상태는 복원하지 않아 정상적으로 재시도된다.
+        """
+
+        previous = read_status(self.status.path)
+        if not previous:
+            return
+        terminal = {"succeeded", "adopted", "already_done"}
+        restored = {}
+        for job_id, record in (previous.get("jobs") or {}).items():
+            state = record.get("state")
+            if state in terminal or str(state).startswith(("failed", "skipped")):
+                restored[job_id] = record
+        if restored:
+            self.results.update(restored)
+            self.log(f"이전 결과 복원: {sorted(restored)}")
+        self.idle_seconds_total = float(previous.get("idle_seconds_total") or 0.0)
+        for key in ("decisions",):
+            if previous.get(key):
+                self.status.data[key] = previous[key]
+
     def run_job(self, job: Job) -> dict:
         if job.kind == "adopt":
             return self.verify_run(job.id, job.ckpt_dir or "", job.expect)
+        # 상태 파일이 유실됐더라도 디스크가 이미 완료를 증명하면 다시 돌리지 않는다.
+        # 학습 재실행은 시간 낭비일 뿐 아니라 완주 checkpoint 를 덮어쓰는 파괴적 동작이다.
+        if job.kind == "train" and job.ckpt_dir and job.expect:
+            done = self.verify_run(job.id, job.ckpt_dir, job.expect)
+            if done["state"] == "succeeded":
+                self.log(f"[{job.id}] 이미 완료돼 있어 건너뛴다 ({job.ckpt_dir})")
+                return self.outcome(
+                    job, "already_done", f"디스크에 완료 상태로 존재: {job.ckpt_dir}",
+                    checkpoint=done.get("checkpoint"),
+                )
         if job.kind == "decision":
             return self.run_decision(job)
         if job.kind == "bundle":
@@ -1180,6 +1215,9 @@ class Supervisor:
     # -- 메인 루프 ---------------------------------------------------------
 
     def run(self) -> int:
+        # 복원이 반드시 첫 기록보다 앞서야 한다. 순서가 바뀌면 jobs={} 로 이전 결과를
+        # 덮어쓴 뒤 그 빈 파일을 읽게 되어 복원이 조용히 무력화된다.
+        self.restore_results()
         self.status.set(
             state="starting",
             gpu=self.spec.gpu,
@@ -1187,8 +1225,12 @@ class Supervisor:
             host=socket.gethostname(),
             queue_file=self.spec.source,
             started_at_utc=utc_now_iso(),
-            idle_seconds_total=0.0,
-            jobs={},
+            idle_seconds_total=round(self.idle_seconds_total, 1),
+            jobs=dict(self.results),
+            # 리더가 STALE 을 판정하려면 감독자가 얼마나 자주 쓰는지 알아야 한다.
+            # drained 상태에서는 300초마다 쓰므로 30초 기준으로 보면 항상 STALE 로 보인다.
+            status_interval_seconds=self.spec.tunable("status_interval_seconds", 30.0),
+            drained_poll_seconds=self.spec.tunable("drained_poll_seconds", 300.0),
         )
         self.log(f"감독자 시작: GPU{self.spec.gpu}, 큐 {self.spec.source}")
 
@@ -1241,7 +1283,7 @@ class Supervisor:
             unmet = [
                 d
                 for d in job.depends_on
-                if self.results.get(d, {}).get("state") not in {"succeeded", "adopted"}
+                if self.results.get(d, {}).get("state") not in {"succeeded", "adopted", "already_done"}
             ]
             if unmet:
                 if all(d in self.results for d in job.depends_on):
