@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """duct.yaml 기하로 도메인 랜덤화 RIR 뱅크 생성.
 
-  python scripts/data/build_rir_bank.py --n 300 --out data/rir_bank/duct_rirs_v1.npz
+  .venv/bin/python scripts/data/build_rir_bank.py --n 300 --out data/rir_bank/duct_rirs_v1.npz
 덕트 치수(duct.yaml)를 바꾸면 반드시 다시 실행해야 시뮬레이션에 반영된다.
 """
 

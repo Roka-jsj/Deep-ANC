@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """데이터 전송 패킹 — Elice 업로드용 tar 샤드 생성 (수만 개 파일 → 수 개 tar).
 
-  python scripts/data/pack_transfer.py --src data/raw/noise --shard-gb 2
+  .venv/bin/python scripts/data/pack_transfer.py --src data/raw/noise --shard-gb 2
 Elice 쪽에서: for f in transfer/*.tar; do tar -xf "$f" ; done
 """
 

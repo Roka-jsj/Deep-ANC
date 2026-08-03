@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """노이즈 풀 인덱싱 → JSONL manifest 생성 (파일 단위 train/val/test 분할).
 
-  python scripts/data/prepare_noise_pool.py
+  .venv/bin/python scripts/data/prepare_noise_pool.py
 리샘플/정규화는 학습 로더(NoisePool)가 실시간으로 수행하므로 여기서는 인덱스만 만든다.
 """
 

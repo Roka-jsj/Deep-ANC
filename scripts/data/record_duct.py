@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """덕트 실측 수집 — 소음 재생(ch0) + 레퍼런스/에러 마이크 동시 녹음 (ANC OFF).
 
-  python scripts/data/record_duct.py --program tone --frequency 300 --seconds 60
-  python scripts/data/record_duct.py --program band --seconds 120
-  python scripts/data/record_duct.py --program silence --seconds 30   # 암소음 측정
+  .venv/bin/python scripts/data/record_duct.py --program tone --frequency 300 --seconds 60
+  .venv/bin/python scripts/data/record_duct.py --program band --seconds 120
+  .venv/bin/python scripts/data/record_duct.py --program silence --seconds 30   # 암소음 측정
 
 저장: data/recorded/<타임스탬프_프로그램>/{mics.wav(2ch PCM_32), source.wav, session.json}
 시작 시 레퍼런스 마이크(ch1) 자가진단 — 과거 무신호 이력 대응 (docs/02).
@@ -29,6 +29,11 @@ from deep_anc.audio_io import (                              # noqa: E402
     rms_dbfs,
 )
 from deep_anc.config import REPO_ROOT, load_yaml             # noqa: E402
+from deep_anc.data.manifest import (                         # noqa: E402
+    validate_group_id,
+    validate_session_id,
+    validate_source_family,
+)
 from deep_anc.realtime.noise_gen import NoiseProgram         # noqa: E402
 
 
@@ -46,9 +51,33 @@ def main() -> int:
     parser.add_argument("--file", default=None, help="program=file 재생 wav")
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--out-root", default="data/recorded")
+    parser.add_argument(
+        "--source-family",
+        default=None,
+        help=(
+            "소스 계열 ID(예: speech/music/environment). 생략 시 program 이름을 사용하며, "
+            "program=file은 명시를 권장"
+        ),
+    )
+    parser.add_argument(
+        "--group-id",
+        default=None,
+        help=(
+            "분할 누수를 막을 상관 그룹 ID(같은 화자/곡/원본/환경의 반복 세션은 같은 값). "
+            "생략 시 현재 세션만의 ID 사용"
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="ref 마이크 무신호여도 진행")
     parser.add_argument("--ref-check-dbfs", type=float, default=-80.0)
     args = parser.parse_args()
+
+    try:
+        source_family = validate_source_family(args.source_family or args.program)
+        requested_group_id = (
+            validate_group_id(args.group_id) if args.group_id is not None else None
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     import sounddevice as sd
 
@@ -139,8 +168,13 @@ def main() -> int:
     session_dir.mkdir(parents=True, exist_ok=True)
     sf.write(session_dir / "mics.wav", recorded, fs, subtype="PCM_32")
     sf.write(session_dir / "source.wav", source, fs, subtype="FLOAT")
+    session_id = validate_session_id(session_dir.name)
+    group_id = requested_group_id or validate_group_id(session_id)
     meta = {
+        "session_id": session_id,
         "program": prog_cfg,
+        "source_family": source_family,
+        "group_id": group_id,
         "seconds": args.seconds,
         "sample_rate": fs,
         "block_size": block,
@@ -152,7 +186,7 @@ def main() -> int:
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(f"저장 완료: {session_dir}")
-    print("다음: python scripts/data/make_recorded_manifest.py 로 manifest 갱신")
+    print("다음: .venv/bin/python scripts/data/make_recorded_manifest.py 로 manifest 갱신")
     return 0
 
 

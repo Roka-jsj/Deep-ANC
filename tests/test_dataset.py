@@ -1,12 +1,18 @@
 """데이터 파이프라인 검증 — shape/NaN/분할 누수/지연 물리."""
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+import soundfile as sf
 import torch
 import yaml
 
 from deep_anc.config import REPO_ROOT, default_d_noise_delay
-from deep_anc.data.manifest import assign_splits
+from deep_anc.data.manifest import assign_splits, scan_wavs, write_manifest
+from deep_anc.data.noise_pool import NoisePool
+from deep_anc.data.recorded_dataset import RecordedANCDataset
 from deep_anc.data.synth_dataset import SynthANCDataset
 from deep_anc.data.synthetic_signals import KINDS, SyntheticNoise
 from deep_anc.dsp.duct_sim import build_rir_bank
@@ -44,6 +50,8 @@ def test_dataset_items(cfgs, rir_bank, mode):
     data, duct = cfgs
     data = dict(data)
     data["reference_mode"] = mode
+    if mode == "acoustic":
+        data["digital_reference_lead_samples"] = 0
     ds = SynthANCDataset(data, duct, split="train", seed=1, rir_bank=rir_bank)
     assert ds.segment % 256 == 0                  # 런타임 블록 배수 요건
     it = iter(ds)
@@ -75,6 +83,89 @@ def test_manifest_split_assignment():
     assert counts["train"] == 90 and counts["val"] == 5 and counts["test"] == 5
 
 
+def test_scan_wavs_supports_mp3_and_skips_invalid_files(tmp_path, monkeypatch):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    for name in ("a.wav", "b.FLAC", "c.Mp3", "broken.mp3", "ignored.ogg"):
+        (nested / name).touch()
+
+    inspected = []
+
+    def fake_info(path):
+        name = Path(path).name
+        inspected.append(name)
+        if name == "broken.mp3":
+            raise RuntimeError("decode failed")
+        return SimpleNamespace(frames=96_000, samplerate=48_000, channels=2)
+
+    monkeypatch.setattr("deep_anc.data.manifest.sf.info", fake_info)
+
+    entries = scan_wavs(tmp_path, tag="noise")
+
+    assert [Path(entry["path"]).name for entry in entries] == ["a.wav", "b.FLAC", "c.Mp3"]
+    assert set(inspected) == {"a.wav", "b.FLAC", "c.Mp3", "broken.mp3"}
+    assert all(entry["duration_s"] == 2.0 for entry in entries)
+    assert all(entry["sample_rate"] == 48_000 for entry in entries)
+    assert all(entry["channels"] == 2 and entry["tag"] == "noise" for entry in entries)
+
+
+def test_noise_pool_excludes_decode_failure_and_retries(tmp_path, monkeypatch):
+    manifest = tmp_path / "music.jsonl"
+    broken = tmp_path / "broken.mp3"
+    healthy = tmp_path / "healthy.mp3"
+    write_manifest(
+        [
+            {
+                "path": str(broken),
+                "duration_s": 1.0,
+                "sample_rate": 48_000,
+                "channels": 1,
+                "tag": "music",
+                "split": "train",
+            },
+            {
+                "path": str(healthy),
+                "duration_s": 1.0,
+                "sample_rate": 48_000,
+                "channels": 1,
+                "tag": "music",
+                "split": "train",
+            },
+        ],
+        manifest,
+    )
+
+    class DeterministicRng:
+        def __init__(self):
+            self.indices = iter((0, 1))
+
+        def choice(self, *_args, **_kwargs):
+            return next(self.indices)
+
+        def integers(self, *_args, **_kwargs):
+            return 0
+
+    def fake_info(path):
+        if Path(path) == broken:
+            raise RuntimeError("damaged MP3 frame")
+        return SimpleNamespace(frames=128, samplerate=48_000, channels=1)
+
+    def fake_read(path, **_kwargs):
+        assert Path(path) == healthy
+        return np.ones((128, 1), dtype=np.float32), 48_000
+
+    monkeypatch.setattr("deep_anc.data.noise_pool.sf.info", fake_info)
+    monkeypatch.setattr("deep_anc.data.noise_pool.sf.read", fake_read)
+
+    pool = NoisePool([manifest], split="train", sample_rate=48_000, seed=1)
+    pool.rng = DeterministicRng()
+    segment = pool.sample_segment(64)
+
+    assert segment.shape == (64,)
+    assert np.all(segment == 1.0)
+    assert pool._active_weights[0] == 0.0
+
+
 def test_d_noise_default_geometry(cfgs):
     """digital-ref 기본 지연 = s_delay − t(CS→ERR) + t(NS→ERR) [C2]."""
     _, duct = cfgs
@@ -92,8 +183,10 @@ def test_d_noise_no_double_count(cfgs, rir_bank):
     from deep_anc.dsp.filters import fft_filter
 
     data, duct = cfgs
+    data = dict(data)
+    data["digital_primary_path_mode"] = "rir_surrogate"
     fs = 48000
-    ds = SynthANCDataset(dict(data), duct, split="train", seed=1, rir_bank=rir_bank)
+    ds = SynthANCDataset(data, duct, split="train", seed=1, rir_bank=rir_bank)
     total = default_d_noise_delay(duct, fs, s_path_delay=1342)
     t_ns_err = duct_distance_samples(duct, "noise_speaker", "error_mic", fs)
     assert ds.d_noise_total == total
@@ -105,3 +198,107 @@ def test_d_noise_no_double_count(cfgs, rir_bank):
     onset = int(np.flatnonzero(np.abs(d) > np.max(np.abs(d)) * 0.05)[0])
     # RIR 위치 지터(±1cm)·저역통과 전이 여유 포함
     assert abs(onset - total) <= 24, f"d 온셋 {onset} vs 총지연 {total}"
+
+
+def test_synth_digital_reference_lead_uses_continuous_future(cfgs, rir_bank):
+    """K lead는 tail zero-padding이 아니라 같은 연속 source의 t+K여야 한다."""
+    data, duct = cfgs
+    data = dict(data)
+    data.update(
+        {
+            "reference_mode": "digital",
+            "digital_reference_lead_samples": 109,
+            "level_dbfs": [0.0, 0.0],
+            "snr_mic_noise_db": [300.0, 300.0],
+            "dc_hum_prob": 0.0,
+        }
+    )
+    ds = SynthANCDataset(data, duct, split="train", seed=1, rir_bank=rir_bank)
+
+    class DeterministicItemRng:
+        def __init__(self):
+            self.uniform_values = iter((0.0, 300.0))
+
+        def uniform(self, *_args, **_kwargs):
+            return next(self.uniform_values)
+
+        def choice(self, values, **_kwargs):
+            return np.asarray(values).reshape(-1)[0]
+
+        def integers(self, low, *_args, **_kwargs):
+            return int(low)
+
+        def standard_normal(self, size):
+            return np.zeros(size, dtype=np.float32)
+
+        def random(self):
+            return 0.5
+
+    requested = []
+
+    def deterministic_source(_rng, _synth, n_samples=None):
+        requested.append(n_samples)
+        return np.arange(n_samples, dtype=np.float32)
+
+    ds._sample_source = deterministic_source
+    item = ds._make_item(DeterministicItemRng(), SyntheticNoise(ds.fs, seed=0))
+
+    assert requested == [ds.segment + 109]
+    np.testing.assert_array_equal(
+        item["x"][0].numpy(), np.arange(109, 109 + ds.segment, dtype=np.float32)
+    )
+
+
+def test_reference_lead_is_rejected_for_acoustic_mode(cfgs, rir_bank):
+    data, duct = cfgs
+    data = dict(data)
+    data.update({"reference_mode": "acoustic", "digital_reference_lead_samples": 109})
+
+    with pytest.raises(ValueError, match="reference_mode=digital"):
+        SynthANCDataset(data, duct, split="train", seed=1, rir_bank=rir_bank)
+
+
+def test_recorded_digital_reference_uses_same_lead_alignment(tmp_path):
+    manifest = tmp_path / "recorded.jsonl"
+    session = tmp_path / "session"
+    session.mkdir()
+    write_manifest(
+        [{"path": str(session), "split": "train", "duration_s": 1.0}], manifest
+    )
+    data = {
+        "sample_rate": 48_000,
+        "segment_seconds": 256 / 48_000,
+        "reference_mode": "digital",
+        "digital_reference_lead_samples": 7,
+        "closed_loop": {"feedback_delay_samples": [1, 2]},
+    }
+    ds = RecordedANCDataset(manifest, data, split="train", seed=1)
+    source = np.arange(512, dtype=np.float32)
+    ds._load_session = lambda _entry: (source.copy(), np.zeros_like(source), source.copy())
+
+    item = next(iter(ds))
+
+    np.testing.assert_array_equal(
+        item["x"][0].numpy(), item["d"][0].numpy() + 7.0
+    )
+
+
+def test_recorded_digital_reference_requires_source_wav(tmp_path):
+    manifest = tmp_path / "recorded.jsonl"
+    session = tmp_path / "session"
+    session.mkdir()
+    sf.write(session / "mics.wav", np.zeros((512, 2), dtype=np.float32), 48_000)
+    write_manifest(
+        [{"path": str(session), "split": "train", "duration_s": 512 / 48_000}],
+        manifest,
+    )
+    data = {
+        "sample_rate": 48_000,
+        "segment_seconds": 256 / 48_000,
+        "reference_mode": "digital",
+        "digital_reference_lead_samples": 7,
+        "closed_loop": {"feedback_delay_samples": [1, 2]},
+    }
+
+    with pytest.raises(FileNotFoundError, match="source.wav"):
+        next(iter(RecordedANCDataset(manifest, data, split="train", seed=1)))

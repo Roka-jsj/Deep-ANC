@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DL vs FxLMS vs 무제어 — 동일 시나리오·동일 S(z) 오프라인 비교표(md).
 
-  python scripts/eval/compare_fxlms.py --ckpt runs/pretrain_base/ckpt/best.pt
+  .venv/bin/python scripts/eval/compare_fxlms.py --ckpt runs/pretrain_base_corrected/ckpt/best.pt
 시나리오: 톤 300Hz / 멀티톤 / 대역잡음 80–1k / 비선형(고조파+클립) — configs/eval.yaml 과 동일 구성.
 """
 

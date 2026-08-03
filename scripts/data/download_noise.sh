@@ -34,4 +34,4 @@ if [ ! -d "$ROOT/esc50/ESC-50-master" ]; then
   rm -f "$ROOT/esc50.zip"
 fi
 
-echo "완료. 다음: python scripts/data/prepare_noise_pool.py"
+echo "완료. 다음: .venv/bin/python scripts/data/prepare_noise_pool.py"

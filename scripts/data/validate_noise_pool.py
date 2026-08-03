@@ -5,7 +5,7 @@
   샘플레이트 분포 / 총 시간 / 읽기 실패율 / 클리핑 / 무음 비율 / RMS 분포
   / 덕트 관심대역(80–800 / 800–1633 / 1633+ Hz) 에너지 비율
 
-  python scripts/data/validate_noise_pool.py            # → data/manifests/dataset_qa.md
+  .venv/bin/python scripts/data/validate_noise_pool.py  # → data/manifests/dataset_qa.md
 경고는 리포트에 표기하고 계속 진행, 치명(태그 전체 읽기 불가 등)은 종료코드 1.
 판단 기준 근거: docs/03 §8 (학습 분포 ↔ 배포 분포 정합).
 """

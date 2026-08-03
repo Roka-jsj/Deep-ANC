@@ -9,6 +9,8 @@ scripts/data/record_duct.py 가 저장한 세션 구조:
 ANC OFF 상태로 녹음했으므로 err 마이크 신호가 곧 d(t)이다.
 digital-ref 모드에서는 source.wav 를 x_ref 로, acoustic-ref 모드에서는
 ref 마이크(ch1)를 x_ref 로 사용한다. manifest(recorded_*.jsonl)는 세션 단위 분할.
+digital_reference_lead_samples=K인 digital-ref 파인튜닝은 동일 세션의
+source[t+K]를 입력으로 사용해 합성 데이터/런타임 정렬과 맞춘다.
 """
 
 from __future__ import annotations
@@ -41,6 +43,16 @@ class RecordedANCDataset(IterableDataset):
         raw_segment = int(round(float(data_cfg["segment_seconds"]) * self.fs))
         self.segment = max(256, (raw_segment // 256) * 256)
         self.reference_mode = str(data_cfg.get("reference_mode", "digital"))
+        self.digital_reference_lead = int(
+            data_cfg.get("digital_reference_lead_samples", 0)
+        )
+        if self.digital_reference_lead < 0:
+            raise ValueError("digital_reference_lead_samples는 0 이상이어야 합니다")
+        if self.reference_mode != "digital" and self.digital_reference_lead:
+            raise ValueError(
+                "digital_reference_lead_samples는 reference_mode=digital에서만 "
+                "사용할 수 있습니다"
+            )
         fb = data_cfg.get("closed_loop", {}).get("feedback_delay_samples", [512, 1024])
         self.feedback_delay_range = (int(fb[0]), int(fb[1]))
         self.seed = int(seed)
@@ -50,12 +62,28 @@ class RecordedANCDataset(IterableDataset):
         mics, sr = sf.read(session_dir / "mics.wav", dtype="float32", always_2d=True)
         if sr != self.fs:
             raise ValueError(f"{session_dir}: 샘플레이트 {sr} != {self.fs}")
+        if mics.shape[1] < 2:
+            raise ValueError(f"{session_dir}: mics.wav는 err/ref 2채널이어야 합니다")
+        if not np.all(np.isfinite(mics)):
+            raise ValueError(f"{session_dir}: mics.wav에 NaN/Inf가 있습니다")
         err = mics[:, 0]
         ref = mics[:, 1]
         source_path = session_dir / "source.wav"
         if source_path.exists():
-            source, _ = sf.read(source_path, dtype="float32", always_2d=True)
+            source, source_sr = sf.read(
+                source_path, dtype="float32", always_2d=True
+            )
+            if source_sr != self.fs:
+                raise ValueError(
+                    f"{session_dir}: source.wav 샘플레이트 {source_sr} != {self.fs}"
+                )
             source = source[:, 0]
+            if not np.all(np.isfinite(source)):
+                raise ValueError(f"{session_dir}: source.wav에 NaN/Inf가 있습니다")
+        elif self.reference_mode == "digital":
+            raise FileNotFoundError(
+                f"{session_dir}: digital-reference 학습에 source.wav가 필요합니다"
+            )
         else:
             source = np.zeros_like(err)
         n = min(err.size, ref.size, source.size)
@@ -72,12 +100,21 @@ class RecordedANCDataset(IterableDataset):
 
         while True:
             err, ref, source = sessions[int(rng.integers(len(sessions)))]
-            if err.size <= self.segment:
+            if err.size <= self.segment + self.digital_reference_lead:
                 continue
-            start = int(rng.integers(0, err.size - self.segment))
+            start = int(
+                rng.integers(
+                    0, err.size - self.segment - self.digital_reference_lead
+                )
+            )
             sl = slice(start, start + self.segment)
             d = err[sl].copy()
-            x_ref = source[sl].copy() if self.reference_mode == "digital" else ref[sl].copy()
+            if self.reference_mode == "digital":
+                lead = self.digital_reference_lead
+                ref_sl = slice(start + lead, start + lead + self.segment)
+                x_ref = source[ref_sl].copy()
+            else:
+                x_ref = ref[sl].copy()
             fb_delay = int(rng.integers(*self.feedback_delay_range))
             err_in = _delay_np(d, fb_delay)
             x = np.stack([x_ref, err_in]).astype(np.float32)
