@@ -9,9 +9,13 @@
 - **Elice 인스턴스**: `elicer@central-01.tcp.tunnel.elice.io` **포트 47863**, 2×A100 80GB.
   pem = 이 Jetson의 `~/.ssh/elice.pem` (커밋 금지). 32 vCPU, 디스크 84G 여유.
 - **GPU 작업 큐 감독자 2기 가동 중** (이번 세션에 새로 배포):
-  - GPU1 감독자 PID **28680**, 큐 `configs/elice/queue_gpu1.yaml`
+  - GPU1 감독자 PID **28755**, 큐 `configs/elice/queue_gpu1.yaml`
   - GPU0 감독자 PID **28685**, 큐 `configs/elice/queue_gpu0.yaml`
   - 둘 다 **진입 게이트에서 대기 중**이며 기존 학습/watcher를 전혀 건드리지 않는다.
+  - PID는 재기동하면 바뀐다. 권위 있는 소유자는 `runs/.job_queue_gpu{0,1}.lock`의 owner JSON이다.
+  - **`tier` 필드는 현재 메타데이터일 뿐 강제되지 않는다.** 감독자는 큐에 적힌 순서대로
+    실행한다. Tier-B를 "다른 GPU의 Tier-A ETA 안에서만"으로 제한하려면 별도 구현이 필요하다.
+    지금 큐는 순서 자체가 우선순위를 반영하도록 배열해 뒀다.
 - **현재 GPU 점유** (감독자가 이어받기 전):
   - GPU0: base `train.py` PID **22554**, 100k 목표. 완료 예상 **8/4 04:45 KST 전후**
   - GPU1: 구 watcher `run_structure_search.sh` PID **24271**. tiny_long_attn 20k 완주 중,
@@ -90,9 +94,12 @@ $SSH 'cd ~/Deep-ANC && bash scripts/elice/run_job_queue.sh 1'   # 또는 0
 
 1. **감독자 인계 확인** (01:16~01:25 KST 전후): `queue_status.py`로 GPU1이
    `search_tiny_control`을 시작했는지 확인. `idle_seconds_total`이 60초 미만이어야 정상.
-2. **승자 선정 결과 확인** (03:00 KST 전후): `select_structure_winner`의 verdict를 읽고
-   `winner`가 정해졌으면 **연장 작업을 큐에 추가**한다(아래 템플릿). `winner_ambiguous`면
-   자동 승격하지 않고 seed 반복 결과를 먼저 본다.
+2. **승자 선정 결과 확인** (03:00 KST 전후): `select_structure_winner`의 verdict를 읽는다.
+   승자가 정해지면 감독자가 `extension_template`로 **연장 작업을 자동으로 큐에 넣는다**
+   (사람이 손댈 필요 없음). 다음 두 경우에는 넣지 않으며 그때만 판단이 필요하다.
+   - `winner_ambiguous` — last와 best의 승자가 다름. seed 반복 결과를 먼저 본다.
+   - `winner_is_control` — 대조군이 이겼다. tiny 100k 완주본이 이미 있어 연장이 무의미하다.
+     이 경우 GPU1이 빈다. 다른 실험을 큐에 덧붙일지 판단한다(큐는 재로드된다).
 3. **base 완주 확인** (04:45 KST 전후): GPU0 감독자가 held-out 평가를 자동 실행한다.
    완료되면 checkpoint를 회수하고 **사용자에게 인스턴스 중지/삭제 안내** (시간 과금!).
 4. **최우선 하드웨어 게이트**: I²S 입력이 22:39부터 다시 간헐 과클리핑 FAIL이다.
@@ -104,41 +111,21 @@ $SSH 'cd ~/Deep-ANC && bash scripts/elice/run_job_queue.sh 1'   # 또는 0
 6. THD/IMD와 recorded 독립 세션 최소 80개 수집 → measured P(z) open-loop 파인튜닝 →
    recorded G4 → FxLMS와 동일 OFF→ON→OFF 세션 비교.
 
-### 승자 연장 작업 템플릿 (`configs/elice/queue_gpu1.yaml`에 덧붙일 것)
+### 승자 연장 작업의 규약 (감독자가 자동 적용 — 참고용)
 
-```yaml
-  - id: extend_winner_100k
-    kind: train
-    tier: A
-    reason: "구조 승자를 100k 로 연장"
-    config: configs/train_pretrain.yaml
-    model_config: configs/model_{winner}.yaml
-    ckpt_dir: runs/extend_{winner}_100k          # 반드시 새 디렉터리 (pilot 20k 비교 근거 보존)
-    resume: runs/search_{winner}/ckpt/last.pt    # best 로 되감으면 optimizer 가 후퇴한다
-    copy_before_start:
-      - {src: runs/search_{winner}/ckpt/best.pt, dst: runs/extend_{winner}_100k/ckpt/best.pt}
-    overrides:
-      batch_size: 128
-      num_workers: 14
-      prefetch_factor: 4
-      schedule.total_steps: 100000
-      schedule.warmup_steps: 1250
-      eval_every: 500
-      early_stop_patience: 0
-      seed: 20260902          # 원 seed +100 — 아래 주의사항 참조
-      # run_until_step 미지정 → resolve_run_until_step() 이 100000 폴백
-    expect: {step: 100000}
-    post_eval:
-      - {ckpt: last, n_items: 64, out: eval_final_last}
-```
+`configs/elice/queue_gpu1.yaml`의 `extension_template`에 확정돼 있다. 손으로 만들 일이
+생기면 다음 세 가지를 반드시 지킨다.
 
-> **seed 를 바꾸는 이유**: worker RNG는 checkpoint에 저장되지 않고 iterator 생성 시
-> `seed + split_offset + worker_id*1009`로 재시드된다(`synth_dataset.py:269`).
-> seed를 그대로 두면 step 20k–40k가 0–20k와 **같은 데이터를 재생**한다.
-> (worker RNG를 checkpoint에 저장하는 근본 수정은 별도 후속 항목이다.)
-
-> **best.pt 를 복사하는 이유**: `trainer.py:390`은 `best.pt`가 있을 때만 `best_metric`을
-> `min()`으로 교정한다. 복사하지 않으면 20k best를 넘기 전까지 `best.pt`가 아예 없다.
+- **`ckpt_dir`은 새 디렉터리** — 같은 곳에 resume 하면 pilot의 20k `best/last`를 덮어써
+  구조 비교 근거가 사라진다.
+- **`resume`은 `last.pt`** — `best.pt`로 되감으면 optimizer/scheduler가 후퇴해 예산을 낭비한다.
+  대신 pilot의 `best.pt`를 새 ckpt 디렉터리로 **복사**해야 `trainer.py:390`의 `best_metric`
+  min() 교정이 동작한다(복사하지 않으면 20k best를 넘기 전까지 `best.pt`가 아예 없다).
+- **`seed`는 원 seed +100** — worker RNG는 checkpoint에 저장되지 않고 iterator 생성 시
+  `seed + split_offset + worker_id*1009`로 재시드된다(`synth_dataset.py:269`). 그대로 두면
+  step 20k–40k가 0–20k와 **같은 데이터를 재생**한다. (worker RNG를 checkpoint에 저장하는
+  근본 수정은 별도 후속 항목이다.)
+- `run_until_step`은 지정하지 않는다 → `resolve_run_until_step()`이 `total_steps` 폴백.
 
 ### 데이터/체크포인트 선택 주의
 
