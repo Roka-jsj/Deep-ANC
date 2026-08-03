@@ -17,14 +17,33 @@ def _load(name):
         return yaml.safe_load(f)
 
 
-@pytest.mark.parametrize("name,lo,hi", [("model_tiny", 0.9e6, 1.5e6), ("model_base", 5.0e6, 7.0e6)])
-def test_parameter_budget(name, lo, hi):
+@pytest.mark.parametrize(
+    "name,lo,hi,expected",
+    [
+        ("model_tiny", 0.9e6, 1.5e6, 1_164_809),
+        ("model_tiny_attn", 0.9e6, 1.5e6, 1_231_369),
+        ("model_tiny_long", 0.9e6, 1.5e6, 1_301_771),
+        ("model_tiny_long_attn", 0.9e6, 1.5e6, 1_368_331),
+        ("model_base", 5.0e6, 7.0e6, 5_994_512),
+    ],
+)
+def test_parameter_budget(name, lo, hi, expected):
     model = build_model(_load(name))
     n = parameter_count(model)
     assert lo < n < hi, f"{name}: {n/1e6:.2f}M — 설계 예산 밖"
+    assert n == expected, f"{name}: 문서화된 파라미터 수 {expected:,}와 불일치"
 
 
-@pytest.mark.parametrize("name", ["model_tiny", "model_base"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "model_tiny",
+        "model_tiny_attn",
+        "model_tiny_long",
+        "model_tiny_long_attn",
+        "model_base",
+    ],
+)
 def test_causality(name):
     torch.manual_seed(0)
     model = build_model(_load(name)).eval()
@@ -38,7 +57,16 @@ def test_causality(name):
     assert torch.equal(y1[..., :change], y2[..., :change])
 
 
-@pytest.mark.parametrize("name", ["model_tiny", "model_base"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "model_tiny",
+        "model_tiny_attn",
+        "model_tiny_long",
+        "model_tiny_long_attn",
+        "model_base",
+    ],
+)
 def test_streaming_equivalence(name):
     torch.manual_seed(1)
     model = build_model(_load(name)).eval()
