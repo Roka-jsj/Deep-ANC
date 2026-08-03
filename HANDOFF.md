@@ -2,31 +2,27 @@
 
 > **"이어서 진행해줘"를 받았다면**: §0 라이브 상태 → §2 현재 상태 → §3 다음 단계 순으로 실행하라.
 > 규칙은 [AGENTS.md](AGENTS.md)가 단일 출처. 이 파일은 작업 상태가 바뀔 때마다 갱신할 것.
-> 최종 갱신: 2026-08-04 05:10 KST
+> 최종 갱신: 2026-08-04 05:55 KST
 
 ## 0. 라이브 상태 (가장 먼저 확인할 것 — 시각은 참고용, 실상태는 아래 명령으로)
 
 - **Elice 인스턴스**: `elicer@central-01.tcp.tunnel.elice.io` **포트 47863**, 2×A100 80GB.
   pem = 이 Jetson의 `~/.ssh/elice.pem` (커밋 금지). 32 vCPU, 디스크 84G 여유.
-- **GPU 작업 큐 감독자 2기 가동 중** (이번 세션에 새로 배포):
-  - GPU1 감독자 PID **32728** — 대조군 완주, 승자 선정 완료, seed 반복 실행 중
-  - GPU0 감독자 PID **28685** — base 완주 대기 중
-  - 기존 학습/watcher를 전혀 건드리지 않는다.
+- **모든 GPU 작업이 끝났다. 회수도 완료됐다 → 인스턴스를 삭제할 것.**
+  두 감독자는 `drained` 상태로 살아 있으며 `recommendation: teardown`을 표시한다.
+  큐에 작업을 덧붙이면 다시 일한다(감독자가 300초마다 큐 파일을 재로드).
   - PID는 재기동하면 바뀐다. 권위 있는 소유자는 `runs/.job_queue_gpu{0,1}.lock`의 owner JSON이다.
   - **`tier` 필드는 현재 메타데이터일 뿐 강제되지 않는다.** 감독자는 큐에 적힌 순서대로
     실행한다. Tier-B를 "다른 GPU의 Tier-A ETA 안에서만"으로 제한하려면 별도 구현이 필요하다.
     지금 큐는 순서 자체가 우선순위를 반영하도록 배열해 뒀다.
-- **GPU1 인계 완료 (01:16:32 → 01:17:10, 유휴 38초)**. 구 watcher PID 24271 종료 →
-  `runs/.structure_search.lock` 획득 → GPU1 유휴 3회 확인 → 후보 3종 adopt 검증 통과 →
-  `search_tiny_control` 시작. 구조 탐색 3종(tiny_long/tiny_attn/tiny_long_attn)은 모두
-  20,000 step 완주했다.
-- **GPU0**: base `train.py` PID **22554**, 100k 목표. 완료 예상 **8/4 04:50 KST 전후**
-- **자동 진행 순서**:
-  - GPU1: (완료) `search_tiny_control` 20k → 승자 선정 → 재판정 →
-    (진행 중) `seed_repeat_control_20k` → `seed_repeat_tiny_long_20k` → `decide_seed_repeat`.
-    승자가 대조군이라 100k 연장은 하지 않는다 — `pretrain_tiny_corrected` 100k 완주본이
-    이미 있어 같은 학습을 반복하는 것이 낭비이기 때문이다.
-  - GPU0: base best/last held-out 평가 → seed 반복 20k → 회수 번들(SHA-256 목록)
+- **감독자 인계 실적** — 원래대로면 GPU1은 3.4시간, GPU0은 무기한 유휴였다.
+  - GPU1: 01:16:32 구 watcher 종료 → 01:17:10 작업 시작 = **유휴 38초**
+  - GPU0: 04:48:34 base 종료 → 04:49:10 작업 시작 = **유휴 36초**
+- **완료된 GPU 작업**: `search_tiny_control` 20k → 승자 선정 → 재판정 →
+  `seed_repeat_control_20k` → `seed_repeat_tiny_long_20k` → `decide_seed_repeat`,
+  base best/last held-out 평가, tiny best/last 동일조건 평가, 회수 번들.
+  승자가 대조군이라 100k 연장은 하지 않았다 — `pretrain_tiny_corrected` 100k 완주본이
+  이미 있어 같은 학습을 반복하는 것이 낭비이기 때문이다.
 
 ### base vs tiny 최종 비교 (2026-08-04 05:03, 동일 held-out 64 아이템)
 
@@ -89,10 +85,55 @@
 Jetson 실측 비용축과 함께 보면 결론이 더 분명하다: `tiny` P99 1.84ms vs
 `tiny_long` 2.24ms(+22%). **감쇠 이득 없이 지연만 늘어난다.**
 
-> **주의 — 이 결과의 한계.** 신뢰구간은 평가 아이템 간 분산만 덮고 run 간(seed) 분산은
-> 덮지 않는다. `tiny_long`의 Δ −0.224는 정확히 그 한계에 걸린 값이라 현재
-> `seed_repeat_{control,tiny_long}_20k`(seed 20260902)를 돌려 재현성을 확인하는 중이다.
-> 또한 20k는 100k 궤적의 앞부분일 뿐이라 **후반부에 순위가 뒤집힐 가능성은 배제하지 못한다.**
+**seed 반복으로 확인 완료 (2026-08-04 05:45)** — 결론이 재현됐을 뿐 아니라,
+**효과 크기보다 seed 분산이 크다**는 것이 직접 드러났다.
+
+| seed | `tiny_long` Δ vs 대조군 (primary=last) | 95% CI | 유의 |
+|---|---:|---|---|
+| 20260802 | −0.224 | [−0.709, +0.255] | 아니오 |
+| 20260902 | **+0.460** | [−0.655, +1.621] | 아니오 |
+
+두 seed 사이에서 Δ가 −0.22 ↔ +0.46으로 **0.68dB 요동**한다. 판정 마진 0.30dB보다 크므로
+`tiny_long`의 이득(있다면)은 run 간 잡음에 묻히는 수준이다. **구조 탐색은 종결이며
+tiny를 유지한다.**
+
+> **남은 한계.** 20k는 100k 궤적의 앞부분일 뿐이라 **후반부에 순위가 뒤집힐 가능성은
+> 배제하지 못한다.** 다만 tiny의 100k 완주본이 base(5.99M)보다도 나은 상황이라
+> 지금 용량·수용영역을 더 키울 근거는 없다.
+
+### 산출물 회수 완료 (2026-08-04 05:50) — 인스턴스 삭제 가능
+
+`runs/queue/handoff.json`의 60건 중 **46건 SHA-256 일치**, 12건은 의도적 미회수
+(기각된 0dB 초기 실험 `pretrain_{base,tiny}`와 `*_aggressive` 변형), 2건은 bundle 생성
+시점(04:58)에 아직 학습 중이던 `seed_repeat_tiny_long`이라 최종본과 다르다 —
+그 2건은 원격과 최종 SHA를 직접 대조해 일치를 확인했다.
+
+로컬 `runs/`에 회수된 checkpoint의 step 검증 결과:
+
+| run | last.pt step | best_metric |
+|---|---:|---:|
+| `pretrain_base_corrected` | 100,000 | **−19.755** |
+| `pretrain_tiny_corrected` | 100,000 | **−19.537** |
+| `search_tiny_control` | 20,000 | −16.869 |
+| `search_tiny_long` | 20,000 | −16.667 |
+| `search_tiny_attn` | 20,000 | −16.755 |
+| `search_tiny_long_attn` | 20,000 | −16.713 |
+| `seed_repeat_tiny_long` | 20,000 | −16.692 |
+| `seed_repeat_tiny_control` | **1,000 (손상)** | — |
+
+마지막 항목만 §사고 기록 ④의 덮어쓰기로 무효다. **평가 metrics는 완주 시점 것이라
+유효**하며 `runs/seed_repeat_tiny_control/PROVENANCE.md`에 사용 가능/불가를 명시했다.
+
+**→ 두 GPU 모두 유휴이고 남은 GPU 작업이 없다. 사용자는 Elice 인스턴스를 삭제할 것.**
+중지만 해도 스토리지는 과금되며 삭제해야 완전히 멈춘다.
+
+> **04:49 사고 기록 ④.** GPU0 큐와 GPU1 큐에 같은 id·같은 `ckpt_dir`의 seed 반복 작업을
+> 둔 탓에, GPU1이 20k를 완주한 run을 GPU0이 다시 시작해 checkpoint를 step 1000으로
+> 덮어썼다. 근본 원인이 둘이다. ① `ckpt_dir` 점유 검사가 **자기 GPU 프로세스만** 봐서
+> 다른 GPU 감독자를 구조적으로 놓쳤다(→ GPU 무관 검사로 교체, 두 큐가 id/ckpt_dir을
+> 공유하지 못하게 하는 테스트 추가). ② **GPU0 감독자가 00:42 기동 당시의 옛 코드를
+> 메모리에 들고 있었다** — 모듈만 갱신하고 재기동하지 않아 `already_done`도 `child_env`도
+> 없는 버전이 돌았다. **모듈을 갱신했으면 해당 감독자를 반드시 재기동할 것.**
 
 > **02:47 사고 기록 ①.** 첫 승자 선정에서 후보 3종이 전부 `config fingerprint 불일치`로
 > 실격됐다. 지문이 `model`/`model_config`를 포함해 **구조가 다르면 항상 불일치**했기
