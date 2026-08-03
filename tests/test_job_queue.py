@@ -467,6 +467,45 @@ def test_real_queue_files_load(tmp_path):
         assert spec.gpu in (0, 1)
 
 
+def test_real_queues_do_not_share_job_ids_or_ckpt_dirs():
+    """같은 run 이 두 큐에 있으면 두 감독자가 checkpoint 를 서로 덮어쓴다.
+
+    실제로 GPU0 이 GPU1 의 완료된 20k run 을 step 1000 으로 덮어썼다.
+    """
+
+    seen: dict[tuple[str, str], str] = {}
+    for name in ("queue_gpu0.yaml", "queue_gpu1.yaml"):
+        for job in load_queue(REPO_ROOT / "configs" / "elice" / name).jobs:
+            for kind, value in (("id", job.id), ("ckpt_dir", job.ckpt_dir)):
+                if value is None:
+                    continue
+                key = (kind, value)
+                assert key not in seen, f"{kind}={value} 가 {seen[key]} 와 {name} 에 중복"
+                seen[key] = name
+
+
+def test_ckpt_dir_guard_sees_other_gpus_processes(tmp_path):
+    """ckpt_dir 점유 검사는 GPU 를 가리지 않아야 한다.
+
+    자기 GPU 프로세스만 보면 다른 GPU 감독자가 같은 run 을 돌리는 것을 놓친다.
+    """
+
+    from deep_anc.ops.job_queue import processes_with_ckpt_dir
+
+    proc = tmp_path / "proc" / "4321"
+    proc.mkdir(parents=True)
+    proc.joinpath("cmdline").write_bytes(
+        b"python\x00scripts/train/train.py\x00--set\x00ckpt_dir=runs/shared\x00"
+    )
+    proc.joinpath("stat").write_text(_stat_line(4321, "python", "9"), encoding="utf-8")
+    # 이 프로세스에는 CUDA_VISIBLE_DEVICES=1 이 붙어 있지만, GPU0 감독자도 봐야 한다.
+    proc.joinpath("environ").write_bytes(b"CUDA_VISIBLE_DEVICES=1\x00")
+
+    found = processes_with_ckpt_dir("runs/shared", proc_root=tmp_path / "proc")
+    assert [p["pid"] for p in found] == [4321]
+    assert processes_with_ckpt_dir("runs/other", proc_root=tmp_path / "proc") == []
+
+
 def test_train_command_uses_set_overrides(tmp_path):
     spec = _spec(
         tmp_path,

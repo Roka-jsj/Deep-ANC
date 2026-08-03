@@ -314,6 +314,32 @@ def processes_using_gpu(
     return found
 
 
+def processes_with_ckpt_dir(
+    ckpt_dir: str, *, proc_root: str | Path = "/proc"
+) -> list[dict]:
+    """``ckpt_dir=<경로>`` 를 cmdline 에 가진 학습 프로세스 — **GPU 를 가리지 않는다.**
+
+    두 GPU 감독자가 같은 run 을 돌리면 checkpoint 를 서로 덮어쓴다. 자기 GPU 의
+    프로세스만 보는 검사로는 이걸 잡을 수 없다(실제로 놓쳤다).
+    """
+
+    found: list[dict] = []
+    root = Path(proc_root)
+    needle = f"ckpt_dir={ckpt_dir}"
+    try:
+        entries = [e for e in root.iterdir() if e.name.isdigit()]
+    except OSError:
+        return found
+    for entry in entries:
+        identity = proc_identity(int(entry.name), proc_root=proc_root)
+        if identity is None:
+            continue
+        cmdline = identity["cmdline"]
+        if "train.py" in cmdline and needle in cmdline:
+            found.append(identity)
+    return found
+
+
 def gpu_snapshot(index: int) -> dict:
     """nvidia-smi 로 본 GPU 상태. 조회 실패는 ``available=False`` 로 표시한다."""
 
@@ -978,16 +1004,19 @@ class Supervisor:
         if free_gb < min_free:
             return self.outcome(job, "skipped_precondition", f"디스크 여유 {free_gb:.1f}GB < {min_free}GB")
         if job.kind == "train" and job.ckpt_dir:
+            # **GPU 를 가리지 않고** 같은 ckpt_dir 을 쓰는 학습을 찾는다. 자기 GPU 만 보면
+            # 다른 GPU 감독자가 같은 run 을 돌리는 것을 놓쳐 checkpoint 를 서로 덮어쓴다
+            # (실제로 GPU0 이 GPU1 의 완료 run 을 덮어썼다).
             busy = [
                 p
-                for p in processes_using_gpu(
-                    self.spec.gpu, patterns=("train.py",), proc_root=self.proc_root
-                )
-                if f"ckpt_dir={job.ckpt_dir}" in p["cmdline"]
+                for p in processes_with_ckpt_dir(job.ckpt_dir, proc_root=self.proc_root)
+                if p["pid"] != os.getpid()
             ]
             if busy:
                 return self.outcome(
-                    job, "skipped_precondition", f"ckpt_dir 이 이미 학습 중: {busy[0]['pid']}"
+                    job,
+                    "skipped_precondition",
+                    f"같은 ckpt_dir 을 다른 학습이 쓰는 중: pid {busy[0]['pid']}",
                 )
         for item in job.copy_before_start:
             source = _abs(item["src"])

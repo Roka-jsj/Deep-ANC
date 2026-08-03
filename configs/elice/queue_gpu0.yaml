@@ -67,32 +67,45 @@ jobs:
     on_failure: retry_then_continue
     max_retries: 1
 
-  # ── Tier B: seed 반복 ────────────────────────────────────────────────
-  # 승자 선정의 신뢰구간은 평가 아이템 간 분산만 덮고 run 간(seed) 분산은 덮지 않는다.
-  # 이 두 작업이 짝을 이뤄야 paired Δ 의 seed 분산을 실측할 수 있다.
-  - id: seed_repeat_control_20k
-    kind: train
-    tier: B
-    compare: true
-    reason: "대조군 seed 반복 — 구조 비교의 run 간 분산 실측"
-    config: configs/train_pretrain.yaml
-    model_config: configs/model_tiny.yaml
-    ckpt_dir: runs/seed_repeat_tiny_control
-    overrides:
-      batch_size: 128
-      num_workers: 14
-      prefetch_factor: 4
-      schedule.total_steps: 100000
-      schedule.warmup_steps: 1250
-      run_until_step: 20000
-      eval_every: 500
-      early_stop_patience: 0
-      seed: 20260902
-    expect: {step: 20000, model_name: hybrid_anc_tiny, total_steps: 100000}
-    post_eval:
-      - {ckpt: best, n_items: 32, out: eval_pilot_best}
-      - {ckpt: last, n_items: 32, out: eval_pilot_last}
-    on_failure: continue
+  # seed 반복은 GPU1 큐로 옮겼다. 같은 id·같은 ckpt_dir 을 두 큐에 두면 두 감독자가
+  # 같은 run 을 돌려 checkpoint 를 서로 덮어쓴다 — 실제로 GPU0 이 GPU1 의 완료 run 을
+  # step 1000 으로 덮어썼다. 한 run 은 한 큐에만 둘 것.
+
+  # ── Tier A: tiny 를 base 와 같은 조건에서 평가 ──────────────────────────
+  # 로컬 Jetson 평가는 data/manifests 와 RIR 뱅크가 없어 소스별 표에 synthetic 만 남는다.
+  # 즉 **기능 2(모든 소리)를 로컬에서는 측정할 수 없다.** 배포 후보를 고르려면 tiny 와
+  # base 를 같은 데이터에서 봐야 하므로 여기서 돌린다.
+  - id: eval_tiny_final_last
+    kind: shell
+    tier: A
+    reason: "tiny last.pt 를 base 와 동일한 held-out 조건에서 평가 (소스별·밴드별)"
+    command:
+      - .venv/bin/python
+      - scripts/eval/evaluate_offline.py
+      - --ckpt
+      - runs/pretrain_tiny_corrected/ckpt/last.pt
+      - --n-items
+      - "64"
+      - --out
+      - runs/pretrain_tiny_corrected/eval_final_last
+    on_failure: retry_then_continue
+    max_retries: 1
+
+  - id: eval_tiny_final_best
+    kind: shell
+    tier: A
+    reason: "tiny best.pt 동일 조건 평가"
+    command:
+      - .venv/bin/python
+      - scripts/eval/evaluate_offline.py
+      - --ckpt
+      - runs/pretrain_tiny_corrected/ckpt/best.pt
+      - --n-items
+      - "64"
+      - --out
+      - runs/pretrain_tiny_corrected/eval_final_best
+    on_failure: retry_then_continue
+    max_retries: 1
 
   # ── Tier A: 회수 번들 ────────────────────────────────────────────────
   # 회수 지연이 곧 과금이다. SHA-256/크기/경로를 미리 계산해 둔다.
