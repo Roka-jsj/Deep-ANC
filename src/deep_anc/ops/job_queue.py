@@ -845,12 +845,26 @@ class Supervisor:
             return False
         return True
 
+    def child_env(self) -> dict[str, str]:
+        """자식 프로세스 환경 — ``CUDA_VISIBLE_DEVICES`` 를 반드시 이 GPU 로 고정한다.
+
+        이걸 빠뜨리면 자식이 두 GPU 를 모두 보고 PyTorch 가 기본값 cuda:0 에 올라간다.
+        GPU1 감독자가 띄운 학습이 GPU0 의 다른 학습 위에 겹쳐서 메모리를 뺏고 속도를
+        떨어뜨린다(실제로 한 번 발생시켰다). ``processes_using_gpu`` 의 유휴 판정도 이
+        환경변수를 근거로 하므로, 설정하지 않으면 감독자끼리 서로를 못 본다.
+        """
+
+        env = dict(os.environ)
+        env["CUDA_VISIBLE_DEVICES"] = str(self.spec.gpu)
+        return env
+
     def spawn(self, command: Sequence[str], log_path: Path) -> subprocess.Popen:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handle = log_path.open("w", encoding="utf-8")
         process = subprocess.Popen(  # noqa: S603 — 명령은 큐 정의에서만 온다
             list(command),
             cwd=str(REPO_ROOT),
+            env=self.child_env(),
             stdout=handle,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

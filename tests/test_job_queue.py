@@ -173,6 +173,35 @@ def test_terminate_group_refuses_foreign_pgid(tmp_path):
         supervisor.terminate_group(os.getpgrp())
 
 
+def test_child_env_pins_cuda_visible_devices(tmp_path, monkeypatch):
+    """자식은 반드시 감독자의 GPU 하나만 봐야 한다.
+
+    이걸 빠뜨리면 PyTorch 가 기본값 cuda:0 에 올라가 GPU1 감독자의 학습이 GPU0 의 다른
+    학습 위에 겹친다. 실제로 한 번 발생시킨 회귀다.
+    """
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    spec = _spec(tmp_path, [])
+    spec.gpu = 1
+    assert _supervisor(spec).child_env()["CUDA_VISIBLE_DEVICES"] == "1"
+    spec.gpu = 0
+    assert _supervisor(spec).child_env()["CUDA_VISIBLE_DEVICES"] == "0"
+
+
+def test_spawned_child_actually_receives_the_pinned_device(tmp_path):
+    """child_env 만 맞고 spawn 이 env 를 넘기지 않으면 의미가 없다 — 실제 자식으로 검증."""
+
+    spec = _spec(tmp_path, [])
+    spec.gpu = 1
+    supervisor = _supervisor(spec)
+    log = tmp_path / "env.log"
+    process = supervisor.spawn(
+        ["/bin/sh", "-c", 'echo "CVD=$CUDA_VISIBLE_DEVICES"'], log
+    )
+    process.wait(timeout=30)
+    assert "CVD=1" in log.read_text(encoding="utf-8")
+
+
 def test_wait_for_pid_exit_detects_pid_reuse(tmp_path):
     """cmdline 이 같아도 starttime 이 바뀌면 원래 프로세스는 죽은 것이다."""
 
