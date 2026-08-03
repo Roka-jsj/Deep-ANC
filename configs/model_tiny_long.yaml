@@ -1,0 +1,29 @@
+# HybridANCNet-tiny-long — tiny의 저주파/주기 수용영역만 확장하는 구조 탐색 후보
+# 기존 tiny와 encoder/GLSTM/출력은 같고 TCN dilation=16 블록을 반복마다 1개 추가한다.
+# 최종 채택은 20k 동일 학습곡선 + source×band held-out + Jetson P99로 결정한다.
+
+name: hybrid_anc_tiny_long
+hop: 128
+win: 384
+in_channels: 2
+io_scale: 0.02
+
+encoder:
+  channels: 128
+
+tcn:
+  repeats: 2
+  dilations: [1, 2, 4, 8, 16]
+  hidden: 256
+  kernel: 3
+
+glstm:
+  groups: 1
+  hidden_per_group: 192
+  insert_after_repeat: 2
+
+attention:
+  enabled: false
+
+limiter:
+  limit: 0.2

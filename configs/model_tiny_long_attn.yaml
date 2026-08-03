@@ -1,0 +1,32 @@
+# HybridANCNet-tiny-long-attn — 긴 TCN 수용영역과 경량 causal MHSA 결합 후보
+# 두 축의 상호작용을 분리하기 위해 tiny-long/tiny-attn과 같은 20k 예산으로 비교한다.
+
+name: hybrid_anc_tiny_long_attn
+hop: 128
+win: 384
+in_channels: 2
+io_scale: 0.02
+
+encoder:
+  channels: 128
+
+tcn:
+  repeats: 2
+  dilations: [1, 2, 4, 8, 16]
+  hidden: 256
+  kernel: 3
+
+glstm:
+  groups: 1
+  hidden_per_group: 192
+  insert_after_repeat: 2
+
+attention:
+  enabled: true
+  heads: 4
+  head_dim: 32
+  window_frames: 64
+  insert_after_repeat: 2
+
+limiter:
+  limit: 0.2

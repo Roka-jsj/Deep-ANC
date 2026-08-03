@@ -1,0 +1,32 @@
+# HybridANCNet-tiny-attn — 기존 tiny에 작은 causal MHSA만 추가하는 구조 탐색 후보
+# 4×32 head, 64-frame(약 170ms) 캐시로 회전기계/음악의 반복 패턴을 재조회한다.
+
+name: hybrid_anc_tiny_attn
+hop: 128
+win: 384
+in_channels: 2
+io_scale: 0.02
+
+encoder:
+  channels: 128
+
+tcn:
+  repeats: 2
+  dilations: [1, 2, 4, 8]
+  hidden: 256
+  kernel: 3
+
+glstm:
+  groups: 1
+  hidden_per_group: 192
+  insert_after_repeat: 2
+
+attention:
+  enabled: true
+  heads: 4
+  head_dim: 32
+  window_frames: 64
+  insert_after_repeat: 2
+
+limiter:
+  limit: 0.2
