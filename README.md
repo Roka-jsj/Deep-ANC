@@ -52,7 +52,7 @@ v1.1/v2 연구 항목은 [docs/11](docs/11_v2_roadmap.md)에 승인·기각 근�
 
 | 항목 | 결과 | 상태 |
 |---|---|:---:|
-| 자동 회귀 테스트 | 266개 (인과성·등가성·DSP·데이터·복구 게이트) | 통과 |
+| 자동 회귀 테스트 | 268개 (인과성·등가성·DSP·데이터·복구 게이트) | 통과 |
 | 오프라인↔스트리밍 수치 등가성 | 최대 오차 약 `3e-8` | 통과 |
 | PyTorch↔ONNX Runtime 등가성 | 최대 오차 `8e-8` 이하 | 통과 |
 | tiny + ORT CPU P99 | **1.84ms** / 게이트 `<3ms` | 통과 |
@@ -265,7 +265,7 @@ Deep_ANC/
 │   ├── demo/             # 세션 평가, direct FxLMS 평가
 │   └── jetson/, export/  # Jetson 유저공간 셋업, TensorRT 엔진 빌드
 ├── assets/               # 다이어그램, 이미지, 버전 관리하는 측정 자산
-├── tests/                # 회귀 테스트 266개
+├── tests/                # 회귀 테스트 268개
 └── docs/                 # 00~11 + FxLMS 부록
 ```
 
@@ -296,7 +296,7 @@ git clone https://github.com/Roka-jsj/Deep-ANC.git
 cd Deep-ANC
 
 bash scripts/jetson/setup_jetson.sh    # .venv 재생성이 필요할 때만. lib preload 훅 포함 — 필수
-.venv/bin/python -m pytest -q          # 266개 전부 통과해야 정상
+.venv/bin/python -m pytest -q          # 268개 전부 통과해야 정상
 .venv/bin/python scripts/data/build_rir_bank.py --n 300
 .venv/bin/python scripts/bench/check_audio_input.py
 ```
