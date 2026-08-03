@@ -1,0 +1,108 @@
+# GPU0 작업 큐 — base 100k 완주 직후를 이어받는다.
+#
+# 지금 띄워서 진입 게이트에서 대기시켜야 base 가 끝나는 순간(약 04:45 KST) 유휴가 0이 된다.
+# 이 파일은 감독자가 매 작업 후 다시 읽으므로 작업을 덧붙이면 재기동 없이 반영된다.
+
+schema_version: 1
+gpu: 0
+python: .venv/bin/python
+state_dir: runs/queue
+
+tunables:
+  poll_seconds: 60
+  gpu_free_confirmations: 3
+  gpu_free_poll_seconds: 10
+  gpu_free_memory_threshold_mib: 1024
+  settle_seconds: 15
+  status_interval_seconds: 60
+  drained_poll_seconds: 300
+  min_free_gb: 10
+
+entry_gate:
+  wait_for_pids:
+    - pid: 22554
+      cmdline_contains: ["train.py", "pretrain_base_corrected"]
+      note: "base 100k 학습 — 완주 대기(재시작 금지)"
+  require_gpu_free: true
+
+adopt:
+  - id: adopt_base
+    run_dir: runs/pretrain_base_corrected
+    expect: {step: 100000, model_name: hybrid_anc_base, total_steps: 100000}
+
+jobs:
+  # ── Tier A: base 최종 held-out 평가 ──────────────────────────────────
+  # 구조 탐색이 하듯 best/last 양쪽을 본다. HANDOFF 가 "best.pt 만 맹신 금지"를 명시했다.
+  - id: eval_base_final_last
+    kind: shell
+    tier: A
+    reason: "base last.pt held-out 재평가 (source×band 포함)"
+    depends_on: [adopt_base]
+    command:
+      - .venv/bin/python
+      - scripts/eval/evaluate_offline.py
+      - --ckpt
+      - runs/pretrain_base_corrected/ckpt/last.pt
+      - --n-items
+      - "64"
+      - --out
+      - runs/pretrain_base_corrected/eval_final_last
+    on_failure: retry_then_continue
+    max_retries: 1
+
+  - id: eval_base_final_best
+    kind: shell
+    tier: A
+    reason: "base best.pt held-out 재평가"
+    depends_on: [adopt_base]
+    command:
+      - .venv/bin/python
+      - scripts/eval/evaluate_offline.py
+      - --ckpt
+      - runs/pretrain_base_corrected/ckpt/best.pt
+      - --n-items
+      - "64"
+      - --out
+      - runs/pretrain_base_corrected/eval_final_best
+    on_failure: retry_then_continue
+    max_retries: 1
+
+  # ── Tier B: seed 반복 ────────────────────────────────────────────────
+  # 승자 선정의 신뢰구간은 평가 아이템 간 분산만 덮고 run 간(seed) 분산은 덮지 않는다.
+  # 이 두 작업이 짝을 이뤄야 paired Δ 의 seed 분산을 실측할 수 있다.
+  - id: seed_repeat_control_20k
+    kind: train
+    tier: B
+    compare: true
+    reason: "대조군 seed 반복 — 구조 비교의 run 간 분산 실측"
+    config: configs/train_pretrain.yaml
+    model_config: configs/model_tiny.yaml
+    ckpt_dir: runs/seed_repeat_tiny_control
+    overrides:
+      batch_size: 128
+      num_workers: 14
+      prefetch_factor: 4
+      schedule.total_steps: 100000
+      schedule.warmup_steps: 1250
+      run_until_step: 20000
+      eval_every: 500
+      early_stop_patience: 0
+      seed: 20260902
+    expect: {step: 20000, model_name: hybrid_anc_tiny, total_steps: 100000}
+    post_eval:
+      - {ckpt: best, n_items: 32, out: eval_pilot_best}
+      - {ckpt: last, n_items: 32, out: eval_pilot_last}
+    on_failure: continue
+
+  # ── Tier A: 회수 번들 ────────────────────────────────────────────────
+  # 회수 지연이 곧 과금이다. SHA-256/크기/경로를 미리 계산해 둔다.
+  - id: handoff_bundle
+    kind: bundle
+    tier: A
+    reason: "회수 대상 산출물의 SHA-256/크기 목록 생성"
+    command:
+      - runs/*/ckpt/*.pt
+      - runs/*/config_snapshot.yaml
+      - runs/*/eval_*/metrics.md
+      - runs/*/eval_*/metrics.npz
+    on_failure: continue

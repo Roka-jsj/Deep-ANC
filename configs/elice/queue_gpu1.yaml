@@ -1,0 +1,100 @@
+# GPU1 작업 큐 — 구조 탐색 watcher 종료 직후를 이어받는다.
+#
+# 배경: 원격 watcher(run_structure_search.sh, PID 24271)는 구버전이라 후보 3개만
+# 돌리고 **20k 예산의 tiny 대조군이 없다**. pretrain_tiny_corrected 는 100k 완주 run
+# 이라 20k 시점 checkpoint 가 남아 있지 않아(last.pt 는 매 eval 덮어쓰기, best.pt 는
+# step 89,500) evaluate_offline 로 비교할 수 없다. 따라서 대조군을 먼저 만든다.
+#
+# 이 파일은 감독자가 매 작업 후 다시 읽는다. 작업을 덧붙이면 재기동 없이 반영된다.
+
+schema_version: 1
+gpu: 1
+python: .venv/bin/python
+state_dir: runs/queue
+
+tunables:
+  poll_seconds: 20
+  gpu_free_confirmations: 3
+  gpu_free_poll_seconds: 10
+  gpu_free_memory_threshold_mib: 1024
+  settle_seconds: 15
+  term_grace_seconds: 20
+  status_interval_seconds: 30
+  drained_poll_seconds: 300
+  min_free_gb: 10
+
+entry_gate:
+  # tiny_long_attn 완주까지 절대 개입하지 않는다.
+  wait_for_pids:
+    - pid: 24271
+      cmdline_contains: ["run_structure_search.sh"]
+      note: "기존 GPU1 구조 탐색 watcher — tiny_long_attn 완주 대기"
+  # lock 획득 성공 = 구 watcher 가 확실히 죽었다는 커널 보장(PID 폴링보다 강하다).
+  # 획득 후 계속 보유해 구 watcher 재실행 자체를 차단한다.
+  acquire_locks: ["runs/.structure_search.lock"]
+  require_gpu_free: true
+
+# 구 watcher 산출물은 재실행하지 않고 검증만 한다.
+adopt:
+  - id: adopt_tiny_long
+    run_dir: runs/search_tiny_long
+    expect: {step: 20000, model_name: hybrid_anc_tiny_long, total_steps: 100000}
+  - id: adopt_tiny_attn
+    run_dir: runs/search_tiny_attn
+    expect: {step: 20000, model_name: hybrid_anc_tiny_attn, total_steps: 100000}
+  - id: adopt_tiny_long_attn
+    run_dir: runs/search_tiny_long_attn
+    expect: {step: 20000, model_name: hybrid_anc_tiny_long_attn, total_steps: 100000}
+
+jobs:
+  # ── Tier A ────────────────────────────────────────────────────────────
+  - id: search_tiny_control
+    kind: train
+    tier: A
+    compare: true
+    reason: "20k 대조군 부재 — 구조 비교 공정성의 기준선"
+    config: configs/train_pretrain.yaml
+    model_config: configs/model_tiny.yaml
+    ckpt_dir: runs/search_tiny_control
+    overrides:
+      batch_size: 128
+      num_workers: 14
+      prefetch_factor: 4
+      schedule.total_steps: 100000
+      schedule.warmup_steps: 1250
+      run_until_step: 20000
+      eval_every: 500
+      early_stop_patience: 0
+    expect: {step: 20000, model_name: hybrid_anc_tiny, total_steps: 100000}
+    post_eval:
+      - {ckpt: best, n_items: 32, out: eval_pilot_best}
+      - {ckpt: last, n_items: 32, out: eval_pilot_last}
+    on_failure: retry_then_continue
+    max_retries: 1
+
+  - id: select_structure_winner
+    kind: decision
+    tier: A
+    reason: "사전 등록 규칙으로 승자 선정 — 결과를 보기 전에 확정된 기준"
+    depends_on:
+      - search_tiny_control
+      - adopt_tiny_long
+      - adopt_tiny_attn
+      - adopt_tiny_long_attn
+    decision:
+      control: {name: tiny_control, run_dir: runs/search_tiny_control}
+      candidates:
+        - {name: tiny_long, run_dir: runs/search_tiny_long}
+        - {name: tiny_attn, run_dir: runs/search_tiny_attn}
+        - {name: tiny_long_attn, run_dir: runs/search_tiny_long_attn}
+      # last 가 1차 지표인 이유: best.pt 는 고정 16개 val 배치에서 뽑혀 선택 편향이 있다.
+      primary_eval: eval_pilot_last
+      confirm_eval: eval_pilot_best
+      margin_db: 0.30
+      worsening_tolerance_db: 1.0
+    on_failure: continue
+
+  # 승자 100k 연장은 select 결과를 보고 이 파일에 덧붙인다(감독자가 재로드한다).
+  # ckpt_dir 은 반드시 새 디렉터리여야 pilot 의 20k best/last 비교 근거가 남는다.
+  # seed 는 원 seed +100 이어야 한다 — worker RNG 는 checkpoint 에 저장되지 않아
+  # 그대로 두면 step 20k-40k 가 0-20k 와 같은 데이터를 재생한다.
