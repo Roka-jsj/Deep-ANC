@@ -9,7 +9,7 @@
 - **Elice 인스턴스**: `elicer@central-01.tcp.tunnel.elice.io` **포트 47863**, 2×A100 80GB.
   pem = 이 Jetson의 `~/.ssh/elice.pem` (커밋 금지). 32 vCPU, 디스크 84G 여유.
 - **GPU 작업 큐 감독자 2기 가동 중** (이번 세션에 새로 배포):
-  - GPU1 감독자 PID **30168** — 인계 완료, `search_tiny_control` 20k 실행 중
+  - GPU1 감독자 PID **32728** — 대조군 완주, 승자 선정 완료, seed 반복 실행 중
   - GPU0 감독자 PID **28685** — base 완주 대기 중
   - 기존 학습/watcher를 전혀 건드리지 않는다.
   - PID는 재기동하면 바뀐다. 권위 있는 소유자는 `runs/.job_queue_gpu{0,1}.lock`의 owner JSON이다.
@@ -22,11 +22,48 @@
   20,000 step 완주했다.
 - **GPU0**: base `train.py` PID **22554**, 100k 목표. 완료 예상 **8/4 04:50 KST 전후**
 - **자동 진행 순서**:
-  - GPU1: `search_tiny_control` 20k → `select_structure_winner` → (승자가 대조군이 아니고
-    모호하지 않으면) `extend_winner_100k` 자동 추가
+  - GPU1: (완료) `search_tiny_control` 20k → 승자 선정 → 재판정 →
+    (진행 중) `seed_repeat_control_20k` → `seed_repeat_tiny_long_20k` → `decide_seed_repeat`.
+    승자가 대조군이라 100k 연장은 하지 않는다 — `pretrain_tiny_corrected` 100k 완주본이
+    이미 있어 같은 학습을 반복하는 것이 낭비이기 때문이다.
   - GPU0: base best/last held-out 평가 → seed 반복 20k → 회수 번들(SHA-256 목록)
 
-> **01:17 사고 기록 — 반드시 읽을 것.** 감독자 첫 기동에서 `spawn()`이 환경을 그대로
+### 구조 탐색 결론 (2026-08-04 02:56 재판정 — 이것이 권위 있는 결과)
+
+**20k 예산에서 어떤 구조 후보도 평범한 `tiny`를 이기지 못했다.** 승자는 대조군이다.
+
+| 후보 (primary = `eval_pilot_last`, 동일 20k) | trusted NMSE | Δ vs 대조군 | 95% CI | 판정 |
+|---|---:|---:|---|---|
+| `tiny_control` (기준) | −14.59 | — | — | **승자** |
+| `tiny_long` | −14.812 | −0.224 | [−0.709, **+0.255**] | 실격 아님, **유의하지 않음**(CI가 0을 가로지름) |
+| `tiny_long_attn` | −12.415 | +2.173 | [+1.47, +2.94] | 실격 — fullband +1.78dB, held-out +1.30dB 악화 |
+| `tiny_attn` | −12.060 | +2.528 | [+1.59, +3.53] | 실격 — fullband +2.15dB, held-out +2.12dB 악화 |
+
+확인 지표(`eval_pilot_best`)에서는 셋 다 대조군과 거의 동률이며 유의한 후보가 없다.
+`last`와 `best`의 격차가 큰 것은 attention 계열의 20k 지점 분산이 크다는 뜻이다 —
+동일 예산·무편향인 `last`를 1차 지표로 삼은 이유가 여기서 드러난다.
+
+Jetson 실측 비용축과 함께 보면 결론이 더 분명하다: `tiny` P99 1.84ms vs
+`tiny_long` 2.24ms(+22%). **감쇠 이득 없이 지연만 늘어난다.**
+
+> **주의 — 이 결과의 한계.** 신뢰구간은 평가 아이템 간 분산만 덮고 run 간(seed) 분산은
+> 덮지 않는다. `tiny_long`의 Δ −0.224는 정확히 그 한계에 걸린 값이라 현재
+> `seed_repeat_{control,tiny_long}_20k`(seed 20260902)를 돌려 재현성을 확인하는 중이다.
+> 또한 20k는 100k 궤적의 앞부분일 뿐이라 **후반부에 순위가 뒤집힐 가능성은 배제하지 못한다.**
+
+> **02:47 사고 기록 ①.** 첫 승자 선정에서 후보 3종이 전부 `config fingerprint 불일치`로
+> 실격됐다. 지문이 `model`/`model_config`를 포함해 **구조가 다르면 항상 불일치**했기
+> 때문이다 — 구조는 실험의 독립변수인데 그것으로 실격시키면 구조 탐색이 불가능해진다.
+> 지문에서 구조 키를 제외하고 재판정했고, 결론(승자=대조군)은 같지만 근거가
+> "실격"에서 "유의한 개선 없음"으로 정정됐다.
+
+> **02:56 사고 기록 ②.** 감독자를 재기동했더니 이미 20k를 완주한 `search_tiny_control`을
+> 처음부터 다시 돌렸다(결과를 메모리에만 뒀기 때문). checkpoint 저장은 500 step마다라
+> step 500 직전에 차단해 완주본(`last.pt` step=20000, best_metric −16.869)을 지켰다.
+> `restore_results()`와 디스크 완료 검사를 넣어 고쳤다. **복원은 반드시 첫 상태 기록보다
+> 앞서야 한다** — 순서가 바뀌면 `jobs={}`로 덮어쓴 빈 파일을 읽어 조용히 무력화된다.
+
+> **01:17 사고 기록 ③ — 반드시 읽을 것.** 감독자 첫 기동에서 `spawn()`이 환경을 그대로
 > 물려줘 자식이 두 GPU를 다 보고 PyTorch 기본값 `cuda:0`에 올라갔다. GPU1의
 > `search_tiny_control`이 **GPU0의 base 위에 겹쳐** 7.4GB를 뺏고 base를 1.84 → 1.36 it/s로
 > 떨어뜨렸다. 즉시 감독자→자식 순으로 중지하고(base는 무사) `Supervisor.child_env()`로
@@ -89,6 +126,8 @@ $SSH 'cd ~/Deep-ANC && bash scripts/elice/run_job_queue.sh 1'   # 또는 0
 - **tiny 100k 완주·로컬 회수**: 최종 val trusted **−19.47** / full −18.27dB,
   best step89,500 trusted **−19.5372dB**. 원격 SHA-256 일치
 - **tiny_long 20k 완주·로컬 회수**: best step13,500 trusted **−16.6672dB**
+- **구조 탐색 종결(잠정)**: 후보 3종 중 어느 것도 20k에서 tiny를 이기지 못했다(§0 표).
+  attention 계열은 fullband·held-out 일반화를 1dB 넘게 해쳐 do-no-harm 실격이다.
 - **Jetson 실측 (2026-08-04)**:
   - `tiny` best.pt → ONNX, ORT 등가 `8.196e-08`, **P99 1.84ms** (게이트 <3ms 통과)
   - `tiny_long` last.pt → ONNX, ORT 등가 `7.567e-09`, **P99 2.24ms** (통과)
@@ -105,12 +144,9 @@ $SSH 'cd ~/Deep-ANC && bash scripts/elice/run_job_queue.sh 1'   # 또는 0
 
 1. **감독자 인계 확인** (01:16~01:25 KST 전후): `queue_status.py`로 GPU1이
    `search_tiny_control`을 시작했는지 확인. `idle_seconds_total`이 60초 미만이어야 정상.
-2. **승자 선정 결과 확인** (03:00 KST 전후): `select_structure_winner`의 verdict를 읽는다.
-   승자가 정해지면 감독자가 `extension_template`로 **연장 작업을 자동으로 큐에 넣는다**
-   (사람이 손댈 필요 없음). 다음 두 경우에는 넣지 않으며 그때만 판단이 필요하다.
-   - `winner_ambiguous` — last와 best의 승자가 다름. seed 반복 결과를 먼저 본다.
-   - `winner_is_control` — 대조군이 이겼다. tiny 100k 완주본이 이미 있어 연장이 무의미하다.
-     이 경우 GPU1이 빈다. 다른 실험을 큐에 덧붙일지 판단한다(큐는 재로드된다).
+2. **seed 반복 결과 확인** (06:20 KST 전후): `decide_seed_repeat`가 seed 20260902에서도
+   `tiny_long`이 대조군을 못 이기는지 재현한다. 재현되면 **"tiny로 충분하다"가 확정**되고
+   구조 탐색은 종결이다. 뒤집히면 run 간 분산이 크다는 뜻이므로 결론을 유보한다.
 3. **base 완주 확인** (04:45 KST 전후): GPU0 감독자가 held-out 평가를 자동 실행한다.
    완료되면 checkpoint를 회수하고 **사용자에게 인스턴스 중지/삭제 안내** (시간 과금!).
 4. **최우선 하드웨어 게이트**: I²S 입력이 22:39부터 다시 간헐 과클리핑 FAIL이다.
