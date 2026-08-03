@@ -1,8 +1,25 @@
 # HANDOFF — 세션 인수인계 (다음 AI 에이전트/개발자용)
 
-> **"이어서 진행해줘"를 받았다면**: §2 현재 상태를 훑고 §3 다음 단계를 위에서부터 실행하라.
+> **"이어서 진행해줘"를 받았다면**: §0 라이브 상태 → §2 현재 상태 → §3 다음 단계 순으로 실행하라.
 > 규칙은 [AGENTS.md](AGENTS.md)가 단일 출처. 이 파일은 작업 상태가 바뀔 때마다 갱신할 것.
-> 최종 갱신: 2026-08-03 (Elice 1차 인스턴스 삭제됨 — 새 인스턴스 대기 상태)
+> 최종 갱신: 2026-08-03 09:4x (Elice 2차 인스턴스에서 부트스트랩 진행 중)
+
+## 0. 라이브 상태 (2026-08-03 기준 — 가장 먼저 확인할 것)
+
+- **Elice 2차 인스턴스 가동 중**: `elicer@central-01.tcp.tunnel.elice.io` **포트 47863**
+  (2×A100 80GB 확인, pem = 이 Jetson 의 `~/.ssh/elice.pem` — 커밋 금지)
+- **부트스트랩 실행 중** (`~/bootstrap.log`): 09:40경 시작, 데이터 다운로드 단계
+  (음악/DEMAND/기계음/ESC-50 해제 완료, DNS 소음·음성 샤드 진행) → 완료 시 자동으로
+  GPU0=base / GPU1=tiny 병렬 학습 시작 (`runs/train_base.log`, `runs/train_tiny.log`)
+- **상태 확인 (가장 먼저 실행)**:
+  ```bash
+  SSH="ssh -i ~/.ssh/elice.pem -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    -o ControlMaster=auto -o ControlPath=~/.ssh/cm/%r@%h-%p -o ControlPersist=600 \
+    -p 47863 elicer@central-01.tcp.tunnel.elice.io"
+  $SSH 'tail -n 5 ~/bootstrap.log; tail -n 3 ~/Deep-ANC/runs/train_base.log ~/Deep-ANC/runs/train_tiny.log 2>/dev/null'
+  ```
+- 학습이 돌고 있으면: val NMSE 하강 추적 → 완료(조기종료 포함) 시 §3-B (회수 후 **인스턴스 삭제 안내** 필수)
+- 부트스트랩이 "[오류]"로 멈췄으면: bzip2 무결성 실패 샤드 재다운로드 후 `bash Deep-ANC/scripts/elice/bootstrap_all.sh` 재실행 (재실행 안전)
 
 ## 1. 프로젝트 한 줄 요약
 
