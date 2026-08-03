@@ -16,6 +16,7 @@ venv/
 /transfer/
 *.wav
 *.flac
+*.mp3
 *.h5
 *.hdf5
 
@@ -41,5 +42,13 @@ venv/
 !assets/measured/*.npz
 
 # SSH/클라우드 비밀키 — 절대 커밋 금지
+# id_* 처럼 넓게 잡지 말 것: 나중에 id_map.py 같은 소스 파일이 조용히 무시된다
 *.pem
+*.key
 id_ed25519*
+id_rsa*
+id_ecdsa*
+id_dsa*
+.env
+.env.*
+!.env.example
