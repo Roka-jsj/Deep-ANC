@@ -6,19 +6,19 @@ cd "$(dirname "$0")/../.."
 
 # 1) venv (ensurepip 미설치 환경 대응: get-pip 부트스트랩)
 python3 -m venv --without-pip --system-site-packages .venv
-source .venv/bin/activate
-curl -sS https://bootstrap.pypa.io/get-pip.py | python
+VENV_PYTHON="$PWD/.venv/bin/python"
+curl -sS https://bootstrap.pypa.io/get-pip.py | "$VENV_PYTHON"
 
 # 2) 기본 의존성 (torch 제외)
-pip install -r requirements-jetson.txt
-pip install -e .
+"$VENV_PYTHON" -m pip install -r requirements-jetson.txt
+"$VENV_PYTHON" -m pip install -e .
 
 # 3) torch — NVIDIA 공식 JP6.1 wheel (jetson-ai-lab 최신은 libcupti 요구로 회피)
-pip install --no-cache-dir \
+"$VENV_PYTHON" -m pip install --no-cache-dir \
   https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
 
 # 4) wheel 이 요구하는 누락 라이브러리를 pip 로 확보 (apt 불필요)
-pip install "nvidia-nvtx-cu12==12.6.77" nvidia-cuda-cupti-cu12 nvidia-cusparselt-cu12
+"$VENV_PYTHON" -m pip install "nvidia-nvtx-cu12==12.6.77" nvidia-cuda-cupti-cu12 nvidia-cusparselt-cu12
 
 # 5) 인터프리터 시작 시 자동 preload 훅 설치
 SITE=.venv/lib/python3.10/site-packages
@@ -40,9 +40,9 @@ EOF
 echo "import _deep_anc_libpaths" > "$SITE/_deep_anc_libs.pth"
 
 # 6) 검증
-python - <<'EOF'
+"$VENV_PYTHON" - <<'EOF'
 import torch, onnxruntime, scipy, numpy
 print("torch", torch.__version__, "| cuda:", torch.cuda.is_available())
 print("ort", onnxruntime.__version__, "| numpy", numpy.__version__, "| scipy", scipy.__version__)
 EOF
-echo "셋업 완료. 다음: pytest -q"
+echo "셋업 완료. 다음: .venv/bin/python -m pytest -q"

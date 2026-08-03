@@ -2,8 +2,7 @@
 # ONNX → TensorRT FP16 엔진 빌드 (Jetson).
 # 사용: bash scripts/export/build_trt.sh runs/export/model.onnx [출력.plan]
 #
-# 필요: trtexec (apt libnvinfer-bin — sudo 필요, 시스템 변경이므로 사용자 판단.
-#       프로젝트 정책상 자동 설치하지 않는다. docs/06 참조)
+# 필요: 현재 환경에 사전 제공된 trtexec. 이 프로젝트에서는 apt/sudo로 설치하지 않는다.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -15,8 +14,8 @@ for c in /usr/src/tensorrt/bin/trtexec "$(command -v trtexec || true)"; do
   if [ -n "$c" ] && [ -x "$c" ]; then TRTEXEC="$c"; break; fi
 done
 if [ -z "$TRTEXEC" ]; then
-  echo "[오류] trtexec 이 없습니다. TensorRT 실행 도구가 필요합니다:" >&2
-  echo "  sudo apt-get install libnvinfer-bin python3-libnvinfer   # 시스템 변경 — 사용자 판단" >&2
+  echo "[오류] trtexec 이 없습니다. 프로젝트 정책상 apt/sudo 설치는 금지됩니다." >&2
+  echo "  현행 배포 경로인 tiny + ONNX Runtime CPU를 사용하세요 (docs/06)." >&2
   exit 1
 fi
 
@@ -32,4 +31,4 @@ fi
 META="${ONNX%.onnx}.json"
 [ -f "$META" ] && cp "$META" "${PLAN%.plan}.json"
 echo "완료: $PLAN"
-echo "벤치: python scripts/bench/measure_inference_latency.py --config configs/runtime.yaml --set engine.type=trt --set engine.plan=$PLAN"
+echo "벤치: .venv/bin/python scripts/bench/measure_inference_latency.py --config configs/runtime.yaml --set engine.type=trt --set engine.plan=$PLAN"

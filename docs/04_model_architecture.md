@@ -4,6 +4,8 @@ GCRN / Transformer / WaveNet / Conv-TasNet 네 구조에서 실시간 ANC 에 �
 취사선택해 결합한 **시간영역 인과 회귀 모델**. STFT 를 쓰지 않는다
 (창 지연 0, TensorRT 의 DFT 미지원 원천 회피).
 
+![HybridANCNet base/tiny 네트워크와 사전학습 손실 경로](../assets/diagrams/hybrid_anc_architecture.svg)
+
 ## 1. 무엇을 취하고 무엇을 버렸나
 
 | 원천 | 취함 | 버림 | 근거 |
@@ -30,19 +32,42 @@ GCRN / Transformer / WaveNet / Conv-TasNet 네 구조에서 실시간 ANC 에 �
 
 | 변형 | 파라미터 | 연산 | 수용영역 | 용도 |
 |---|---|---|---|---|
-| tiny | 1.16M | 0.43 GMAC/s | 0.16s + LSTM | **현행 실시간 기본** (ORT CPU P99 1.5ms 실측) |
-| base | 5.99M | 2.25 GMAC/s | 0.50s + LSTM + MHSA 170ms | TRT FP16 배포 목표 (ORT CPU 6.8ms) |
+| tiny | 1,164,809 (1.16M) | 0.43 GMAC/s | 0.16s + LSTM | **현행 실시간 기본** (ORT CPU P99 1.5ms 실측) |
+| tiny-attn | 1,231,369 (1.23M) | 측정 전 | 0.16s + LSTM + MHSA 170ms | GPU1 구조 탐색 후보 |
+| tiny-long | 1,301,771 (1.30M) | 측정 전 | 0.33s + LSTM | GPU1 구조 탐색 후보 |
+| tiny-long-attn | 1,368,331 (1.37M) | 측정 전 | 0.33s + LSTM + MHSA 170ms | 결합 ablation 후보 |
+| base | 5,994,512 (5.99M) | 2.25 GMAC/s | 0.50s + LSTM + MHSA 170ms | TRT FP16 배포 목표 (ORT CPU 6.8ms) |
 | large | (v2 옵션) | — | — | A100 teacher/distillation — 1차 릴리스 제외 |
 
-파라미터 실측: tests/test_model_shapes.py (tiny 0.9~1.5M, base 5~7M 게이트).
+파라미터 실측: tests/test_model_shapes.py (tiny 계열 0.9~1.5M, base 5~7M 게이트).
+후보 3종은 100k LR 스케줄을 바꾸지 않고 `run_until_step=20000`에서 같은 학습곡선을
+비교한다. source×band held-out와 Jetson P99를 통과하기 전에는 현행 tiny를 대체하지 않는다.
+
+### 파라미터 분해
+
+| 구간 | base | tiny |
+|---|---:|---:|
+| Encoder + ChannelLN + projection | 459,520 | 213,376 |
+| TCN | 4,020,495 (268,033 × 15) | 547,848 (68,481 × 8) |
+| GLSTM | 922,368 | 272,256 |
+| Causal MHSA | 263,936 | — |
+| Head + PReLU + Decoder | 328,193 | 131,329 |
+| **합계** | **5,994,512** | **1,164,809** |
+
+`io_scale`은 학습 파라미터가 아닌 buffer다. 현재 Elice Stage-1은 base batch 96과
+tiny batch 128을 각각 100k step 학습한다. GPU0/base와 GPU1/tiny는 서로 독립된
+프로세스이며, 두 모델 사이에 gradient·가중치 공유나 증류는 없다.
 
 ## 3. 인과성과 지연
 
 - 인코더는 과거 384샘플만 참조(좌측 패딩), 디코더 OLA 는 과거 프레임의 꼬리만 합산
   → **알고리즘 지연 0**. 테스트: 미래 입력을 바꿔도 현재 출력 불변(비트 단위 동일).
-- 필요한 예측(digital-ref −2.3ms / acoustic-ref −30ms)은 구조가 아니라
-  **손실 정렬로 학습**된다: 플랜트가 y 에 1598샘플 지연을 부과하므로, 손실을 낮추려면
-  모델이 자동으로 그만큼 미래를 예측해야 한다 (예측 헤드 불필요).
+- 모델 자체는 입력에서 미래 샘플을 참조하지 않는다. 현재 digital-ref는 모델 예측에
+  109샘플 차이를 맡기지 않고, 자기생성 ref를 먼저 주고 실제 noise playback을
+  109샘플 FIFO로 지연한다. `reference[t]=playback[t+109]`이므로
+  `109 + D_noise(1489) = S_total(1598)`로 도착 시각이 정렬된다.
+- acoustic-ref에서는 이 확정적 선행 공급을 쓸 수 없다. 약 30ms 예측 부담은 손실 정렬과
+  LSTM/MHSA의 주기 기억으로 학습하되, 광대역 랜덤음은 물리적으로 예측할 수 없다.
 
 ## 4. 스트리밍 상태 (전부 명시적 텐서, 정적 shape)
 
@@ -58,18 +83,44 @@ GCRN / Transformer / WaveNet / Conv-TasNet 네 구조에서 실시간 ANC 에 �
 스트리밍=오프라인 등가성: 실측 max err ~3e-8 (테스트 게이트 1e-5). GLSTM 은 학습 시 cuDNN nn.LSTM,
 스트리밍/export 시 동일 가중치의 수동 셀 — 등가성 테스트 포함 (설계 H1).
 
-## 5. 학습 손실 (`losses/anc_loss.py`)
+## 5. Stage-1 학습 플랜트와 손실 (`losses/anc_loss.py`)
 
 ```
-y → G_nl(랜덤 SEF/drive)  → S(z)(1342+256 지연 + 2048탭 FIR, 섭동 증강) → e = d + S(G_nl(y))
-L = NMSE(dB) + 1.0·MR-STFT{256,512,1024,2048}×W(f) + 1e-3·L_pow + 1.0·L_clip(마진 0.18)
+source n ─→ x_ref=n(t+109) ─→ HybridANCNet ─→ y
+       └→ P_surrogate=S FIR/gain, delay 1489 ───────────────→ d
+y → G_nl(η=10, drive=1) → S(z)(1342+256 지연, 공칭 고정) → e=d+S·y
+
+L = NMSE_150–600Hz(dB)
+    + 1.0·MR-STFT{256,512,1024,2048}×W(f)
+    + 1e-3·L_pow + 1.0·L_clip(마진 0.18)
 ```
 
-- NMSE(dB) = 평가지표를 직접 최소화. MR-STFT 는 스펙트럼 균형 담당.
-- **W(f) 커리큘럼 A**: 80–1000Hz ×3, 1633Hz(컷오프) 이상 ×0.25, 40Hz 미만 ×0.1.
+- `P_surrogate`는 측정 S의 장치 gain/FIR을 P에 재사용해 P/S 단위를 맞춘다.
+  `D_noise=1489`만 별도로 적용한다. 실제 P가 아니므로 이 단계의 dB는 실제 감쇠가 아니다.
+- NMSE 목적함수는 S 실측 excitation band 150–600Hz와 duct 목표 80–800Hz의 교집합이다.
+  로그의 `nmse_t`/`nmse_trusted_db`가 최적화·best 선택 기준이고,
+  `nmse_f`/`nmse_fullband_db`는 전대역 증폭 여부를 감시하는 별도 지표다.
+- **W(f) 커리큘럼 A**: `duct.yaml` 목표대역 80–800Hz ×3,
+  1633Hz(컷오프) 이상 ×0.25, 40Hz 미만 ×0.1. MR-STFT는 스펙트럼 균형을 담당한다.
   풀밴드 커리큘럼 B 는 **광대역 S(z) 재보정 통과 후에만** (설계 C3 게이트).
+- Stage-1은 delay/gain/tilt jitter와 all-pass를 모두 끈 공칭 plant이며, 비선형도
+  η=10·drive=1·hardclip=0의 사실상 선형 조건이다. 미관측 plant/비선형 랜덤화는
+  실측 조건 또는 적응층을 갖춘 이후 단계에서 점진적으로 켠다.
 - 극성 규약: 측정 FIR 에 극성이 포함 — **추가 부호 반전 금지** (e = d + S·y).
 - 손실은 FP32 고정 (bf16 은 FFT 미지원).
+
+### 과거 0dB 실행을 폐기한 이유
+
+과거 실행은 단위 gain 1D `P_err` RIR과 장치 스케일 측정 S를 섞어 limiter ±0.2로는
+상쇄할 수 없는 d를 만들었다. 동시에 모델이 관측하지 못하는 delay/all-pass를 batch마다
+독립 랜덤화하고 fullband NMSE를 선택 기준으로 사용했다. 이때 loss≈2, NMSE≈0dB는
+"긴 초기 구간"이 아니라 y≈0이 최적인 잘못된 목적의 신호다. 해당 체크포인트는 새
+Stage-1에 resume하지 않는다.
+
+현재 checkpoint에는 resolved model/data/duct 설정과 함께 lead, trusted band,
+`physics_status=secondary_surrogate_representation_pretrain`이 저장된다. 측정 P로
+파인튜닝한 checkpoint는 `measured_primary_path`로 구분하며, 배포 runtime은 checkpoint/ONNX
+메타의 lead가 설정과 다르면 실행을 거부한다.
 
 ## 6. ONNX Export 규약 (`scripts/train/export_onnx.py`)
 

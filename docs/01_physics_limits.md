@@ -12,6 +12,7 @@
 | 채택 S(z) 순수지연 | **1342샘플 = 27.96ms** | secondary_path_4s.npz (fit 2.14dB, coherence 0.40) |
 | S(z) 보정 유효대역 | **150–600Hz** | 동 npz excitation_band — 밖은 잡음 피팅 |
 | 3-스레드 런타임 핸드오프 | **+256샘플 = 5.33ms** | 콜백→추론→다음 콜백 1 hop (설계 C1) |
+| digital `D_noise` | **1489샘플 = 31.02ms (현재 추정)** | S 지연에서 CS→ERR를 빼고 NS→ERR를 더한 값 |
 
 주의: S(z) 지연 27.96ms 의 대부분은 **USB/ALSA 버퍼 지연**이다 (덕트 내 음향 전파는
 CS→ERR 50mm = 0.15ms 에 불과).
@@ -37,14 +38,46 @@ d 도달:  δ_out + t_ac(NS→ERR)=3.21ms      y 도달: δ_out + t_ac(CS→ERR)
 → 예측 여유 = 3.21 − 0.15 = +3.06ms (147샘플) − 핸드오프 5.33ms = −2.27ms
 ```
 
-실무 수치로는: d 경로 순수지연 D_noise ≈ 1342 − 7 + 154 = **1489샘플**,
-상쇄 경로 = 1342 + 256(핸드오프) = **1598샘플**. 차이 −109샘플(−2.3ms) 만큼 모델이
-**아주 짧은 미래 예측**을 하면 되고, 이는 8ms 룩백 인코더로 충분히 학습 가능하다.
-**→ 광대역 랜덤 잡음의 상쇄가 인과적으로 가능한 모드다.** (기존 FxLMS 가
-reference=digital 로 동작했던 것과 같은 원리)
+실무 수치로는 d 경로 순수지연 `D_noise ≈ 1342 − 7 + 154 = 1489샘플`,
+상쇄 경로 총지연 `S_total = 1342 + 256(핸드오프) = 1598샘플`이다. lead가 0이면
+모델이 109샘플(2.27ms) 뒤의 광대역 랜덤 신호를 예측해야 하므로, 현재 Stage-1은
+예측에 맡기지 않고 자기생성 소스가 주는 확정적 선행 정보를 실제 재생 스케줄에 반영한다.
 
-D_noise 는 `scripts/data/calibrate_wideband.py --output-channel noise` 로 실측해
-`duct.yaml digital_reference.d_noise_delay_samples` 에 기입한다 (미기입 시 위 기하 추정 사용).
+**현재 digital-ref 규약은 playback FIFO lead=109다.** 런타임은 지금 생성하고 게이트까지
+적용한 블록을 모델 ref에 즉시 공급하고, 소음 ch0에 나가는 playback만 109샘플 FIFO로
+늦춘다. 정상 구간에서 다음 관계가 성립한다.
+
+```
+reference[t] = playback[t + 109]
+reference[t]에 대응하는 d 도달 = 109 + D_noise(1489) = 1598샘플 뒤
+reference[t]로 만든 y 도달       = S_total(1598)             = 1598샘플 뒤
+```
+
+이는 모델이 미래 입력을 읽는 것이 아니다. Jetson이 재생할 소스를 먼저 알고 있어 ref를
+공급한 뒤 실제 playback을 지연하는 인과적 스케줄이다. FIFO는 시작할 때 109개의 0으로
+채워지며, 학습은 연속 source를 `segment+109`만큼 뽑아 `x_ref[t]=n[t+109]`,
+`playback[t]=n[t]`로 동일 정렬을 재현한다. 체크포인트/ONNX 메타의 lead와 런타임 lead가
+다르면 시작 전에 거부한다. 설정 단일 출처는
+`data.digital_reference_lead_samples` / `runtime.digital_reference_lead_samples`다.
+
+`D_noise=1489`는 아직 기하 기반 추정이다.
+`scripts/data/calibrate_wideband.py --output-channel noise`로 noise 출력→ERR `P(z)`를 실측해
+`duct.digital_reference.primary_path_npz`와 `d_noise_delay_samples`에 같은 NPZ의 값을
+기입해야 물리 성능 파인튜닝으로 넘어갈 수 있다. 측정은 `S(z)`와 같은 장치 gain·볼륨에서
+수행해야 `P/S` 단위가 맞는다.
+
+### 현재 Stage-1의 P(z) 대용 정책
+
+실측 `P(z)`가 없을 때 1D `p_err` RIR은 절대 장치 gain이 없고, 측정 장치 스케일의
+`S(z)`와 직접 비교할 수 없다. 실제로 이 조합은 필요한 y가 limiter ±0.2를 크게 넘어
+영출력(약 0dB)이 유리한 잘못된 목적을 만들었다. 현재 `secondary_surrogate`는
+`P(z)`의 FIR/gain에 `S(z)`를 빌리고 지연만 `D_noise=1489`로 적용한다. 따라서
+P/S 스케일이 맞는 역매핑을 학습할 수 있지만 다음 제한이 있다.
+
+- checkpoint `physics_status=secondary_surrogate_representation_pretrain`
+- 실제 noise 스피커 경로의 주파수응답·극성·비선형을 재현하지 않음
+- surrogate val dB로 실제 감쇠나 FxLMS 대비 우위를 주장하지 않음
+- 실측 `P(z)` + 실측/재보정 `S(z)` + 독립 recorded val/test 이후에만 물리 성능 판정
 
 ### acoustic reference — 2단계 목표
 
@@ -76,20 +109,23 @@ acoustic-ref 광대역이 되려면 전기적 총지연 < REF→CS 음향 전파
 - **평면파 컷오프 f_cut = c/(2a) = 343/(2×0.105) = 1,633Hz.**
   그 이상은 고차 모드가 전파되어 단일 CS/ERR 로는 단면 전체를 제어할 수 없다
   (마이크 1개가 단면을 대표하지 못함 → 제어 붕괴 위험).
-- 따라서 **1차 실험 목표 대역은 80–800Hz** (덕트 문서 rev.3 의 현실 대역),
-  학습 손실의 커리큘럼 A 가중치(80–1000Hz ×3)와 일치한다.
+- 최종 1차 실험 목표 대역은 **80–800Hz**지만, 현재 `S(z)`가 신뢰되는 범위는
+  **150–600Hz**뿐이다. Stage-1은 두 범위의 교집합인 150–600Hz trusted NMSE를
+  최적화하고 fullband NMSE를 do-no-harm 관측값으로 함께 기록한다.
+- 80–150Hz와 600–800Hz 성능은 광대역 `P/S` 재측정 전에는 주장하지 않는다.
+  MR-STFT 커리큘럼 A는 목표 80–800Hz를 가중하지만, 이것이 측정 신뢰대역을 넓혀주지는 않는다.
 - 8kHz+ 풀밴드는: ① S(z) 광대역 재보정(coherence≥0.6) 통과 ② 컷오프 이상 대역의
   감쇠 한계 실측 확인 후 **연구 단계**로 진행한다 (모델·데이터는 48kHz 풀밴드 대응 완료).
 - 축방향 공진 70/210/350/489/629Hz — 이 주파수로 가진하면 큰 SPL 을 얻어
   시연 효과가 좋다 (70Hz 는 스피커 f_s 미만이라 재생 곤란, **210/350Hz 권장**).
 
-## 5. 요약 — 시나리오별 기대치
+## 5. 요약 — 시나리오별 기대치와 판정 단계
 
-| 시나리오 | 모드 | 기대 |
+| 시나리오 | 모드 | 판정 |
 |---|---|---|
-| 톤 300Hz | digital | FxLMS 와 동등 이상 (오프라인 이상 조건에서 FxLMS +88dB) |
-| 멀티톤/기계음 | digital | 강한 감쇠 (주기 학습) |
-| 대역잡음 80–1k | digital | 중간 감쇠 — DL 이 FxLMS(256탭 한계)보다 유리할 여지 |
-| 비선형(고조파+포화) | digital | **DL 우위 입증 목표** (FxLMS 는 선형 모델) |
+| 현재 surrogate 체크포인트 | digital | 표현 사전학습 결과. 실제 감쇠 수치로 사용 금지 |
+| 톤/멀티톤/기계음 150–600Hz | digital measured | 실측 P/S 파인튜닝과 독립 OFF/ON/OFF 평가 후 판정 |
+| 대역잡음 80–800Hz | digital measured | 광대역 P/S 신뢰대역 확보 후 밴드별 판정 |
+| 비선형(고조파+포화) | digital measured | THD/IMD 실측 후 점진적 비선형 커리큘럼에서 DL 우위 검증 |
 | 외부 팬/모터 소음 | acoustic | 2단계 — 주기성분 위주 감쇠 |
 | 외부 백색소음 | acoustic | 불가 (정직하게 명시) — 3단계 하드웨어 개선 후 재도전 |

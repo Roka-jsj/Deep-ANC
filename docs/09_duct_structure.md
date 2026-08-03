@@ -147,3 +147,85 @@ Z : 폭 방향, 후면 → 전면 (+)    0 ~ 125   (단면 중심 62.5)
 - Noise Speaker 마운트면 밀폐 여부
 - 외경 125 mm, 판재 두께 10 mm, 내경 105 mm 실측 검증
 - Ø40 홀 실측 지름
+
+---
+
+## 9. 음향 시간-주파수 구조 실측 상태
+
+### 9.1 “덕트 구조 파악”의 측정 정의
+
+ANC에서 필요한 구조는 스피커와 마이크의 물리 좌표만이 아니다. 다음 네 전달경로에서
+**언제 도달하는지**와 **주파수별로 크기·위상이 어떻게 바뀌는지**를 함께 측정해야 한다.
+
+```text
+Noise Speaker ── NS→REF ──> Reference Mic
+              └─ NS→ERR ──> Error Mic       = P(z) 관측
+
+Cancelling Speaker ── CS→REF ──> Reference Mic  (제어음 누설)
+                    └─ CS→ERR ──> Error Mic      = S(z) 관측
+```
+
+경로별 지도는 80–1600Hz의 magnitude, phase, coherence, group delay와 임펄스 응답으로
+표현한다. 이를 이용하면 REF 선행시간, ERR quiet-zone 도달시간, CS 제어음 도달시간,
+주파수별 공진·감쇠·다중반사를 같은 자료에서 비교할 수 있다.
+
+### 9.2 현재 확정된 상대 도달 순서
+
+ERR와 REF는 같은 I²S 입력 스트림과 시계를 공유한다. 따라서 두 마이크 사이의 상대 TDOA는
+USB 출력 버퍼 변동의 영향을 공통으로 받아 상쇄하며, 현재 반복에서 다음 값이 안정적으로
+관측됐다.
+
+| 출력 구동 | ERR−REF TDOA | 해석 |
+|---|---:|---|
+| NS | +135~+138 samples (**+2.79~+2.88ms**) | NS 소리는 REF에 먼저, ERR에 약 2.8ms 뒤 도달 |
+| CS | −142 samples (**−2.958ms**) | CS 소리는 ERR에 먼저, REF에 약 3.0ms 뒤 도달 |
+
+저레벨 peak 0.005, 300Hz 채널 분리 측정은 xrun/clip 0에서 NS 출력과 CS 출력 모두가
+ERR/REF에 도달함도 확인했다. 이 결과는 네 전달경로의 **생존과 상대 순서**를 확정하지만,
+마이크의 정확한 X/Y/Z 좌표나 고정 위상 `P(z)`/`S(z)`까지 확정하는 것은 아니다.
+
+### 9.3 진단용 주파수 형상과 아직 확정되지 않은 절대 지연
+
+장시간 80–1600Hz ESS 반복에서 magnitude 상관 평균은 P **0.962**, S **0.966**으로
+주파수 형상은 반복성이 있었다. 진단용 peak는 다음과 같다.
+
+| 경로 | 진단용 peak 주파수(Hz) |
+|---|---|
+| P(NS→ERR) | 206.2, 351.2, 458.1, 593.6, 804.9, 933.8, 1071.9, 1194.2 |
+| S(CS→ERR) | 204.0, 348.3, 475.7, 613.4, 822.1, 1041.9, 1188.4, 1315.8, 1464.1 |
+
+204–210Hz, 348–351Hz, 약 458–476Hz, 594–613Hz 부근의 반복 peak는 1차원 예측 공진
+210/350/489/629Hz를 부분적으로 지지한다. 다만 이는 **진단용 magnitude 공진 후보**이며,
+공식 고유모드·물리 좌표·감쇠 성능의 확정값이 아니다.
+
+반면 USB 출력→I²S 입력의 dominant peak는 반복마다 P **37.79–64.88ms**,
+S **37.19–80.31ms** 범위로 이동했다. 이 값에는 음향 비행시간뿐 아니라 APE 입력과 USB 출력의
+서로 다른 시계·PortAudio/장치 버퍼 상태가 포함된다. 따라서 다음 두 값을 혼합하지 않는다.
+
+- **상대 TDOA:** 같은 입력 시계의 ERR−REF 차이. 현재 도달 순서 지도에 사용 가능.
+- **절대 출력 지연 상태:** 출력 시각→마이크 수음 시각. 반복 분포를 기록하되 안정화 전에는
+  고정 음향 지연이나 공식 FIR의 delay로 사용 금지.
+
+현재 장시간 ESS 세션은 xrun/clip 0이어도 절대 지연 안정성 게이트를 실패했다. 그러므로 공식
+`P(z)`/`S(z)` 파일은 생성되지 않았고, 덕트 시간-주파수 식별이 완료됐다고 판정하지 않는다.
+
+### 9.4 단일 스트림 2×2 전달맵 구현
+
+`scripts/bench/measure_duct_transfer_map.py`는 NS와 CS를 별도 프로그램으로 측정하지 않고,
+한 full-duplex 스트림에서 NS 반복→무음 분리→CS 반복 순으로 구동한다. 같은 callback timebase에
+네 경로를 묶어 P−S 차분지연을 보존하고 다음 항목을 함께 저장한다.
+
+- 경로별 반복 IR, complex H(f), magnitude, unwrapped phase, coherence, group delay
+- 같은 I²S 입력 시계의 `lag_err_minus_ref_samples`와 반복 confidence/jitter
+- PortAudio `inputBufferAdcTime/currentTime/outputBufferDacTime` 원값과 진행 잔차
+- raw/corrected output→mic 지연, NS−CS common-offset 차이, acoustic/digital 인과성 예산
+
+```bash
+.venv/bin/python scripts/bench/measure_duct_transfer_map.py \
+  --confirm-volume-minimum
+```
+
+무신호, gap 대비 driven excess 부족, 낮은 IR peak/noise, timestamp 비진행, geometry와 반대인
+TDOA 부호, xrun/clip 또는 마지막 zero flush 실패가 있으면 식별 완료를 허용하지 않는다. 구현과
+합성 2×2 회귀는 통과했지만, 22:39부터 ERR/REF 입력이 다시 간헐 과클리핑되어 실제 실행은
+안전 중단했다. 두 채널 무출력 preflight가 clip 0으로 반복 PASS한 뒤에만 기본 peak 0.005로 실행한다.
