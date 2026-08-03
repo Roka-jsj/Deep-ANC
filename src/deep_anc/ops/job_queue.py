@@ -1085,8 +1085,49 @@ class Supervisor:
             return self.outcome(job, "failed_deterministic", f"결정 실패: {exc}")
         self.status.set(decisions={**(self.status.data.get("decisions") or {}), job.id: verdict})
         self.status.event("decision", job=job.id, verdict=verdict)
+        emitted = self.emit_from_decision(job, verdict)
         state = "succeeded" if verdict.get("winner") else "failed_validation"
-        return self.outcome(job, state, verdict.get("summary", ""), verdict=verdict)
+        detail = verdict.get("summary", "")
+        if emitted:
+            detail += f" → 후속 작업 {emitted} 추가"
+        return self.outcome(job, state, detail, verdict=verdict, emitted=emitted)
+
+    def emit_from_decision(self, job: Job, verdict: dict) -> list[str]:
+        """결정 결과로 후속 작업을 큐에 넣는다.
+
+        이게 없으면 결정 직후 큐가 말라 GPU 가 논다 — 감독자를 만든 이유 자체가 사라진다.
+        """
+
+        template = (job.decision or {}).get("extension_template")
+        if not template:
+            return []
+        if verdict.get("ambiguous"):
+            self.log("winner_ambiguous — 연장을 자동 시작하지 않는다(seed 반복 결과를 먼저 본다)")
+            return []
+        if verdict.get("winner_is_control"):
+            self.log(
+                "승자가 대조군이다 — tiny 100k 완주본이 이미 있으므로 연장하지 않는다"
+            )
+            return []
+        winner = verdict.get("winner")
+        if not winner:
+            return []
+        mapping = {
+            "winner": winner,
+            "winner_run_dir": verdict.get("winner_run_dir") or "",
+            "winner_model_config": verdict.get("winner_model_config") or "",
+        }
+        try:
+            spec = Job(**_substitute(template, mapping))
+        except TypeError as exc:
+            self.log(f"연장 작업 생성 실패(큐는 계속 진행): {exc}")
+            return []
+        if any(existing.id == spec.id for existing in self.spec.jobs):
+            return []
+        self.spec.jobs.append(spec)
+        self.log(f"연장 작업 추가: {spec.id} (승자 {winner})")
+        self.status.event("job_emitted", job=spec.id, source=job.id, winner=winner)
+        return [spec.id]
 
     def run_bundle(self, job: Job) -> dict:
         """회수 대상 산출물의 SHA-256/크기/경로와 scp 명령을 기록한다."""
@@ -1225,6 +1266,21 @@ class Supervisor:
         for lock in reversed(self._held_locks):
             lock.release()
         self._held_locks.clear()
+
+
+def _substitute(value: Any, mapping: dict[str, str]) -> Any:
+    """중첩 구조 안의 ``{winner}`` 같은 자리표시자를 치환한다."""
+
+    if isinstance(value, str):
+        out = value
+        for key, replacement in mapping.items():
+            out = out.replace("{" + key + "}", str(replacement))
+        return out
+    if isinstance(value, dict):
+        return {k: _substitute(v, mapping) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_substitute(v, mapping) for v in value]
+    return value
 
 
 def _yaml_scalar(value: Any) -> str:

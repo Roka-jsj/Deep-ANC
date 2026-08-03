@@ -286,6 +286,13 @@ def decide_structure_winner(
     if not control_spec.get("run_dir"):
         raise ValueError("decision.control.run_dir 이 필요합니다")
 
+    # 승자 이름만으로는 model_config 를 유도할 수 없다 — 대조군 tiny_control 의 모델은
+    # configs/model_tiny.yaml 이라 이름 규칙이 깨진다. 정의에서 직접 끌어온다.
+    model_configs = {
+        str(entry["name"]): str(entry.get("model_config", ""))
+        for entry in [control_spec, *candidates]
+    }
+
     def _rank(eval_dir: str) -> tuple[dict, list[dict]]:
         control_metrics = _candidate_metrics(control_spec["run_dir"], eval_dir)
         items = _per_item(control_metrics["npz"], "per_item_trusted_db")
@@ -369,6 +376,10 @@ def decide_structure_winner(
         "ambiguous": ambiguous,
         "winner": None if ambiguous else primary["name"],
         "winner_run_dir": None if ambiguous else primary["run_dir"],
+        "winner_model_config": None if ambiguous else model_configs.get(primary["name"], ""),
+        # 승자가 대조군이면 연장할 것이 없다 — tiny 100k 완주본(pretrain_tiny_corrected)이
+        # 이미 있으므로 같은 학습을 다시 돌리는 것은 순수 낭비다.
+        "winner_is_control": (not ambiguous) and primary["name"] == control_primary["name"],
         "caveat": (
             "이 신뢰구간은 평가 아이템 간 분산만 덮는다. run 간(seed) 분산은 덮지 않으므로 "
             "seed 반복 결과가 나오기 전에는 확정적 우열 주장으로 쓰지 않는다."

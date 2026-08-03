@@ -82,19 +82,59 @@ jobs:
       - adopt_tiny_attn
       - adopt_tiny_long_attn
     decision:
-      control: {name: tiny_control, run_dir: runs/search_tiny_control}
+      # model_config 를 함께 적는다 — 승자 이름만으로는 유도할 수 없다(tiny_control 의
+      # 모델은 model_tiny.yaml 이라 이름 규칙이 깨진다).
+      control:
+        {name: tiny_control, run_dir: runs/search_tiny_control,
+         model_config: configs/model_tiny.yaml}
       candidates:
-        - {name: tiny_long, run_dir: runs/search_tiny_long}
-        - {name: tiny_attn, run_dir: runs/search_tiny_attn}
-        - {name: tiny_long_attn, run_dir: runs/search_tiny_long_attn}
+        - {name: tiny_long, run_dir: runs/search_tiny_long,
+           model_config: configs/model_tiny_long.yaml}
+        - {name: tiny_attn, run_dir: runs/search_tiny_attn,
+           model_config: configs/model_tiny_attn.yaml}
+        - {name: tiny_long_attn, run_dir: runs/search_tiny_long_attn,
+           model_config: configs/model_tiny_long_attn.yaml}
       # last 가 1차 지표인 이유: best.pt 는 고정 16개 val 배치에서 뽑혀 선택 편향이 있다.
       primary_eval: eval_pilot_last
       confirm_eval: eval_pilot_best
       margin_db: 0.30
       worsening_tolerance_db: 1.0
-    on_failure: continue
 
-  # 승자 100k 연장은 select 결과를 보고 이 파일에 덧붙인다(감독자가 재로드한다).
-  # ckpt_dir 은 반드시 새 디렉터리여야 pilot 의 20k best/last 비교 근거가 남는다.
-  # seed 는 원 seed +100 이어야 한다 — worker RNG 는 checkpoint 에 저장되지 않아
-  # 그대로 두면 step 20k-40k 가 0-20k 와 같은 데이터를 재생한다.
+      # 승자가 정해지면 감독자가 이 템플릿으로 연장 작업을 즉시 큐에 넣는다. 이게 없으면
+      # 결정 직후 큐가 말라 GPU 가 논다. winner_ambiguous 이거나 승자가 대조군이면
+      # (tiny 100k 완주본이 이미 있으므로) 넣지 않는다.
+      extension_template:
+        id: extend_winner_100k
+        kind: train
+        tier: A
+        long: true
+        reason: "구조 승자를 동일 100k cosine 궤적으로 연장"
+        config: configs/train_pretrain.yaml
+        model_config: "{winner_model_config}"
+        # 반드시 새 디렉터리 — 같은 곳에 쓰면 pilot 의 20k best/last 비교 근거가 사라진다.
+        ckpt_dir: "runs/extend_{winner}_100k"
+        # best 로 되감으면 optimizer/scheduler 가 후퇴해 예산을 낭비한다.
+        resume: "{winner_run_dir}/ckpt/last.pt"
+        copy_before_start:
+          # trainer 는 best.pt 가 있을 때만 best_metric 을 min() 으로 교정한다.
+          # 복사하지 않으면 20k best 를 넘기 전까지 best.pt 가 아예 없다.
+          - {src: "{winner_run_dir}/ckpt/best.pt", dst: "runs/extend_{winner}_100k/ckpt/best.pt"}
+        overrides:
+          batch_size: 128
+          num_workers: 14
+          prefetch_factor: 4
+          schedule.total_steps: 100000
+          schedule.warmup_steps: 1250
+          eval_every: 500
+          early_stop_patience: 0
+          # worker RNG 는 checkpoint 에 저장되지 않고 iterator 생성 시 재시드된다.
+          # 원 seed 를 그대로 두면 step 20k-40k 가 0-20k 와 같은 데이터를 재생한다.
+          seed: 20260902
+          # run_until_step 미지정 → resolve_run_until_step() 이 total_steps(100000) 폴백
+        expect: {step: 100000}
+        post_eval:
+          - {ckpt: last, n_items: 64, out: eval_final_last}
+          - {ckpt: best, n_items: 64, out: eval_final_best}
+        on_failure: retry_then_continue
+        max_retries: 1
+    on_failure: continue
