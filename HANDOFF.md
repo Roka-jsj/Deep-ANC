@@ -2,27 +2,38 @@
 
 > **"이어서 진행해줘"를 받았다면**: §0 라이브 상태 → §2 현재 상태 → §3 다음 단계 순으로 실행하라.
 > 규칙은 [AGENTS.md](AGENTS.md)가 단일 출처. 이 파일은 작업 상태가 바뀔 때마다 갱신할 것.
-> 최종 갱신: 2026-08-04 01:00 KST
+> 최종 갱신: 2026-08-04 01:25 KST
 
 ## 0. 라이브 상태 (가장 먼저 확인할 것 — 시각은 참고용, 실상태는 아래 명령으로)
 
 - **Elice 인스턴스**: `elicer@central-01.tcp.tunnel.elice.io` **포트 47863**, 2×A100 80GB.
   pem = 이 Jetson의 `~/.ssh/elice.pem` (커밋 금지). 32 vCPU, 디스크 84G 여유.
 - **GPU 작업 큐 감독자 2기 가동 중** (이번 세션에 새로 배포):
-  - GPU1 감독자 PID **28755**, 큐 `configs/elice/queue_gpu1.yaml`
-  - GPU0 감독자 PID **28685**, 큐 `configs/elice/queue_gpu0.yaml`
-  - 둘 다 **진입 게이트에서 대기 중**이며 기존 학습/watcher를 전혀 건드리지 않는다.
+  - GPU1 감독자 PID **30168** — 인계 완료, `search_tiny_control` 20k 실행 중
+  - GPU0 감독자 PID **28685** — base 완주 대기 중
+  - 기존 학습/watcher를 전혀 건드리지 않는다.
   - PID는 재기동하면 바뀐다. 권위 있는 소유자는 `runs/.job_queue_gpu{0,1}.lock`의 owner JSON이다.
   - **`tier` 필드는 현재 메타데이터일 뿐 강제되지 않는다.** 감독자는 큐에 적힌 순서대로
     실행한다. Tier-B를 "다른 GPU의 Tier-A ETA 안에서만"으로 제한하려면 별도 구현이 필요하다.
     지금 큐는 순서 자체가 우선순위를 반영하도록 배열해 뒀다.
-- **현재 GPU 점유** (감독자가 이어받기 전):
-  - GPU0: base `train.py` PID **22554**, 100k 목표. 완료 예상 **8/4 04:45 KST 전후**
-  - GPU1: 구 watcher `run_structure_search.sh` PID **24271**. tiny_long_attn 20k 완주 중,
-    완료 예상 **8/4 01:16 KST 전후** → 평가 후 watcher 종료 → GPU1 감독자가 인계
-- **인계 후 자동 진행 순서**:
-  - GPU1: `search_tiny_control` 20k(부재하던 대조군) → `select_structure_winner`(사전 등록 규칙)
-  - GPU0: base best/last held-out 평가 → seed 반복 → 회수 번들(SHA-256 목록)
+- **GPU1 인계 완료 (01:16:32 → 01:17:10, 유휴 38초)**. 구 watcher PID 24271 종료 →
+  `runs/.structure_search.lock` 획득 → GPU1 유휴 3회 확인 → 후보 3종 adopt 검증 통과 →
+  `search_tiny_control` 시작. 구조 탐색 3종(tiny_long/tiny_attn/tiny_long_attn)은 모두
+  20,000 step 완주했다.
+- **GPU0**: base `train.py` PID **22554**, 100k 목표. 완료 예상 **8/4 04:50 KST 전후**
+- **자동 진행 순서**:
+  - GPU1: `search_tiny_control` 20k → `select_structure_winner` → (승자가 대조군이 아니고
+    모호하지 않으면) `extend_winner_100k` 자동 추가
+  - GPU0: base best/last held-out 평가 → seed 반복 20k → 회수 번들(SHA-256 목록)
+
+> **01:17 사고 기록 — 반드시 읽을 것.** 감독자 첫 기동에서 `spawn()`이 환경을 그대로
+> 물려줘 자식이 두 GPU를 다 보고 PyTorch 기본값 `cuda:0`에 올라갔다. GPU1의
+> `search_tiny_control`이 **GPU0의 base 위에 겹쳐** 7.4GB를 뺏고 base를 1.84 → 1.36 it/s로
+> 떨어뜨렸다. 즉시 감독자→자식 순으로 중지하고(base는 무사) `Supervisor.child_env()`로
+> `CUDA_VISIBLE_DEVICES`를 고정한 뒤 재기동했다. 자식 환경이 `CUDA_VISIBLE_DEVICES=1`이고
+> GPU1 UUID에 올라간 것, base가 1.79 it/s로 회복한 것을 확인했다.
+> **교훈**: 이 환경변수는 `processes_using_gpu()`의 유휴 판정 근거이기도 하다. 설정하지
+> 않으면 진입 게이트의 (c) 조건 자체가 무력해져 감독자끼리 서로의 자식을 못 본다.
 
 ### 상태 확인 (가장 먼저 실행)
 
@@ -88,7 +99,7 @@ $SSH 'cd ~/Deep-ANC && bash scripts/elice/run_job_queue.sh 1'   # 또는 0
 - **파인튜닝 진입점 완성**: `--state-dir` 배선, `pipeline.lock`, advisory `status.json`,
   exit code 3/4 분리, 상대 config 경로 fail-open 수정.
   검증: `--check-only` → **exit 1 + `runs/` 미생성** (설계대로 NOT READY)
-- **전체 회귀 테스트 266개 통과** (세션 시작 기준선 223 → +43)
+- **전체 회귀 테스트 268개 통과** (세션 시작 기준선 223 → +45)
 
 ### 대기 ⬜ (다음 세션이 할 일 순서)
 
