@@ -13,6 +13,51 @@ import numpy as np
 from scipy import signal
 
 
+class DigitalReferenceBuffer:
+    """자기생성 소스를 ``lead_samples`` 만큼 늦춰 미래 레퍼런스를 제공한다.
+
+    호출자가 넘기는 ``future_block`` 은 지금 생성한(게이트까지 적용된) 신호다.
+    레퍼런스에는 이 블록을 즉시 공급하고, 실제 소음 스피커 출력은 내부 FIFO를
+    거쳐 ``lead_samples`` 뒤에 공급한다. 따라서 정보를 추정하거나 오라클 미래를
+    읽지 않으면서도 ``ref[t] == playback[t + lead]`` 가 성립한다.
+
+    ``lead_samples=0`` 은 완전한 no-op이다. 마지막 축을 시간으로 간주하므로 신호와
+    게이트를 여러 채널로 묶어 함께 지연할 수도 있다.
+    """
+
+    def __init__(self, lead_samples: int = 0) -> None:
+        self.lead_samples = int(lead_samples)
+        if self.lead_samples < 0:
+            raise ValueError("digital reference lead_samples는 0 이상이어야 합니다")
+        self._pending: np.ndarray | None = None
+
+    def process(self, future_block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """``(현재 재생 블록, lead만큼 앞선 레퍼런스 블록)`` 을 반환한다."""
+        block = np.asarray(future_block)
+        if block.ndim < 1 or block.shape[-1] <= 0:
+            raise ValueError("future_block의 마지막 축에는 1개 이상의 샘플이 필요합니다")
+
+        if self.lead_samples == 0:
+            # 반환 배열을 분리해 호출자의 후속 in-place 처리가 서로 전파되지 않게 한다.
+            return block.copy(), block.copy()
+
+        prefix_shape = block.shape[:-1]
+        if self._pending is None:
+            self._pending = np.zeros(
+                (*prefix_shape, self.lead_samples), dtype=block.dtype
+            )
+        elif self._pending.shape[:-1] != prefix_shape:
+            raise ValueError(
+                "DigitalReferenceBuffer 호출 사이에 채널/배치 shape를 바꿀 수 없습니다"
+            )
+
+        frames = block.shape[-1]
+        timeline = np.concatenate([self._pending, block], axis=-1)
+        playback = timeline[..., :frames].copy()
+        self._pending = timeline[..., frames:].copy()
+        return playback, block.copy()
+
+
 class NoiseProgram:
     def __init__(self, cfg: dict, sample_rate: int) -> None:
         self.fs = int(sample_rate)

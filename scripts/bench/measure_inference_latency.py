@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """엔진 스텝 지연 벤치마크 — 배포 게이트: block 256 에서 P99 < 3.0ms.
 
-  python scripts/bench/measure_inference_latency.py --config configs/runtime.yaml --steps 1000
-  python scripts/bench/measure_inference_latency.py --config configs/runtime.yaml --set engine.type=ort
+  .venv/bin/python scripts/bench/measure_inference_latency.py --config configs/runtime.yaml --steps 1000
+  .venv/bin/python scripts/bench/measure_inference_latency.py --config configs/runtime.yaml --set engine.type=ort
 """
 
 import argparse

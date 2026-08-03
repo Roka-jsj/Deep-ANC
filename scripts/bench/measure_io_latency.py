@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """I/O 왕복 지연 스윕 — 처프 재생(상쇄 스피커)→에러 마이크 상호상관.
 
-  python scripts/bench/measure_io_latency.py --blocks 128 256 512 --repeats 3 \
+  .venv/bin/python scripts/bench/measure_io_latency.py --blocks 128 256 512 --repeats 3 \
       --out results/latency_sweep.md
 ⚠ 스피커에서 처프가 재생된다 — 볼륨을 낮춘 상태로 실행할 것.
 결과는 캘리브레이션/학습 지연 가정(secondary_path npz + handoff)의 검증 자료다.

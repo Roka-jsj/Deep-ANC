@@ -114,3 +114,85 @@ def rms_dbfs(samples: np.ndarray, floor_db: float = -200.0) -> float:
     if not np.isfinite(power) or power <= 0.0:
         return floor_db
     return max(floor_db, 10.0 * float(np.log10(power)))
+
+
+def analyze_int32_input_probe(
+    samples: np.ndarray,
+    *,
+    min_rms_dbfs: float = -80.0,
+    max_clip_ratio: float = 0.005,
+    min_unique_codes: int = 8,
+) -> dict:
+    """짧은 S32_LE 입력이 실제 마이크 신호인지 채널별로 판정한다.
+
+    ``-1``/``0`` 같은 고정 I2S 라인은 float 변환 뒤 작은 0처럼 보여 RMS만으로
+    놓칠 수 있다. 원시 코드 다양성·클리핑·RMS를 함께 검사한다.
+    """
+    raw = np.asarray(samples)
+    if raw.ndim != 2 or raw.shape[0] == 0:
+        raise ValueError(f"입력 probe는 [frames, channels]여야 합니다: {raw.shape}")
+    if raw.shape[1] < 2:
+        raise ValueError(f"ERR/REF 2채널 입력이 필요합니다: {raw.shape[1]}채널")
+    raw = raw.astype(np.int32, copy=False)
+    normalized = pcm_int32_to_float32(raw)
+    channels = []
+    for channel in range(raw.shape[1]):
+        values = raw[:, channel]
+        signal = normalized[:, channel]
+        unique_codes = int(np.unique(values).size)
+        clip_ratio = float(np.mean(np.abs(signal.astype(np.float64)) >= 0.99))
+        rms = rms_dbfs(signal)
+        stuck = unique_codes < int(min_unique_codes)
+        valid = (
+            not stuck
+            and rms >= float(min_rms_dbfs)
+            and clip_ratio <= float(max_clip_ratio)
+        )
+        channels.append(
+            {
+                "channel": channel,
+                "rms_dbfs": float(rms),
+                "peak": float(np.max(np.abs(signal))),
+                "clip_ratio": clip_ratio,
+                "unique_codes": unique_codes,
+                "raw_min": int(np.min(values)),
+                "raw_max": int(np.max(values)),
+                "stuck": stuck,
+                "valid": valid,
+            }
+        )
+    return {"frames": int(raw.shape[0]), "channels": channels}
+
+
+def capture_input_probe(
+    audio_cfg: dict,
+    *,
+    seconds: float = 2.0,
+    min_rms_dbfs: float = -80.0,
+    max_clip_ratio: float = 0.005,
+) -> dict:
+    """출력 장치를 열지 않고 설정된 APE 입력만 캡처해 분석한다."""
+    import sounddevice as sd
+
+    fs = int(audio_cfg["sample_rate"])
+    if seconds <= 0.0:
+        raise ValueError("probe seconds는 양수여야 합니다")
+    input_cfg = audio_cfg["input"]
+    device = resolve_alsa_portaudio_device(
+        input_cfg["card"], input_cfg["pcm"], "input", 2
+    )
+    raw = sd.rec(
+        int(round(float(seconds) * fs)),
+        samplerate=fs,
+        channels=2,
+        dtype="int32",
+        device=device,
+    )
+    sd.wait()
+    report = analyze_int32_input_probe(
+        raw,
+        min_rms_dbfs=min_rms_dbfs,
+        max_clip_ratio=max_clip_ratio,
+    )
+    report.update({"device": int(device), "sample_rate": fs})
+    return report

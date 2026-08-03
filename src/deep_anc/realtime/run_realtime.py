@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from ..audio_io import (
+    capture_input_probe,
     float32_to_pcm_int16,
     format_sounddevice_devices,
     pcm_int32_to_float32,
@@ -32,7 +33,7 @@ from ..audio_io import (
 from ..config import DEFAULT_HANDOFF_SAMPLES, load_runtime_config
 from ..dsp.filters import DCBlocker
 from .engines import build_engine, secondary_path_npz
-from .noise_gen import NoiseProgram
+from .noise_gen import DigitalReferenceBuffer, NoiseProgram
 from .ring_buffer import SPSCRing
 from .safety import FadeGate, PowerEMA, SafetySupervisor
 from .ui import KeyboardController, RuntimeState
@@ -44,10 +45,97 @@ def power_to_db(power: float, floor_db: float = -200.0) -> float:
     return max(floor_db, 10.0 * float(np.log10(power)))
 
 
+def fxlms_adaptation_allowed(
+    *,
+    requested: bool,
+    full_anc_gain: bool,
+    full_noise_gain: bool,
+    hold_samples: int,
+    output_clip_fraction: float,
+    input_clip_fraction: float,
+    reference_power: float,
+    stream_ok: bool,
+) -> bool:
+    """FxLMS가 현재 ERR 블록으로 갱신해도 되는 안전 조건."""
+    return bool(
+        requested
+        and full_anc_gain
+        and full_noise_gain
+        and int(hold_samples) == 0
+        and float(output_clip_fraction) == 0.0
+        and float(input_clip_fraction) == 0.0
+        and float(reference_power) > 1.0e-12
+        and stream_ok
+    )
+
+
+def input_preflight(cfg: dict, seconds: float = 2.0) -> bool:
+    """스피커를 열기 전에 필수 I2S 입력 채널이 살아 있는지 확인한다."""
+    report = capture_input_probe(cfg["hardware"]["audio"], seconds=seconds)
+    names = ("ERR", "REF")
+    for item in report["channels"][:2]:
+        index = int(item["channel"])
+        verdict = "PASS" if item["valid"] else "FAIL"
+        print(
+            f"[{verdict}] {names[index]} ch{index}: RMS {item['rms_dbfs']:.2f}dBFS, "
+            f"peak {item['peak']:.6f}, clip {item['clip_ratio']:.3%}, "
+            f"unique {item['unique_codes']}, raw [{item['raw_min']}, {item['raw_max']}]"
+        )
+
+    required = (0, 1) if cfg.get("reference") == "mic" else (0,)
+    failed = [index for index in required if not report["channels"][index]["valid"]]
+    if failed:
+        labels = ", ".join(f"{names[index]} ch{index}" for index in failed)
+        print(
+            f"[중단] 필수 입력({labels})이 무효입니다. 오디오 출력을 시작하지 않습니다.",
+            file=sys.stderr,
+        )
+        return False
+    if not report["channels"][1]["valid"]:
+        print(
+            "[경고] REF ch1 무효 — digital-reference만 허용하며 mic-reference는 금지합니다.",
+            file=sys.stderr,
+        )
+    return True
+
+
+def validate_digital_reference_lead(
+    reference: str,
+    configured_lead: int,
+    checkpoint_lead: int | None = None,
+) -> int:
+    """reference 모드와 학습/배포 lead 정합을 검증하고 정규화된 값을 반환한다."""
+    lead = int(configured_lead)
+    if lead < 0:
+        raise ValueError("digital_reference_lead_samples는 0 이상이어야 합니다")
+    if reference != "digital" and lead:
+        raise ValueError(
+            "digital_reference_lead_samples는 reference=digital에서만 사용할 수 있습니다"
+        )
+    if checkpoint_lead is not None and lead != int(checkpoint_lead):
+        raise ValueError(
+            "digital-reference lead 불일치: "
+            f"runtime={lead}, checkpoint={int(checkpoint_lead)}. "
+            "학습과 배포의 digital_reference_lead_samples를 동일하게 맞추세요."
+        )
+    return lead
+
+
 class RealtimeANC:
     """프로그래밍 API — evaluate_session 등에서 재사용. CLI 는 main() 참조."""
 
     def __init__(self, cfg: dict, record_seconds: float = 0.0) -> None:
+        if bool(cfg.get("start_on", False)):
+            raise ValueError(
+                "안전 규약상 start_on=true는 허용되지 않습니다. "
+                "ANC는 OFF로 시작한 뒤 현장에서 명시적으로 켜야 합니다."
+            )
+
+        reference = str(cfg.get("reference", "digital"))
+        digital_reference_lead = validate_digital_reference_lead(
+            reference, cfg.get("digital_reference_lead_samples", 0)
+        )
+
         import sounddevice as sd
 
         self.sd = sd
@@ -55,19 +143,28 @@ class RealtimeANC:
         hw = cfg["hardware"]["audio"]
         self.fs = int(hw["sample_rate"])
         self.block = int(hw["block_size"])
+        self.latency = str(hw.get("latency", "low"))
+        if self.latency not in {"low", "high"}:
+            raise ValueError(f"hardware.audio.latency는 low/high여야 합니다: {self.latency!r}")
         self.hop = int(cfg.get("hop", self.block))
         if self.hop != self.block:
             raise ValueError("현재 구현은 hop == block_size 를 요구합니다")
         ch = cfg["hardware"]["channels"]
         self.ch_err, self.ch_ref = int(ch["error_mic"]), int(ch["reference_mic"])
         self.ch_noise, self.ch_cancel = int(ch["noise_out"]), int(ch["cancel_out"])
-        self.reference = str(cfg.get("reference", "digital"))
+        self.reference = reference
+        self.digital_reference_lead = digital_reference_lead
 
         self.in_dev = resolve_alsa_portaudio_device(hw["input"]["card"], hw["input"]["pcm"], "input", 2)
         self.out_dev = resolve_alsa_portaudio_device(hw["output"]["card"], hw["output"]["pcm"], "output", 2)
 
         self.engine = build_engine(cfg)
+        checkpoint_lead = getattr(self.engine, "digital_reference_lead_samples", None)
+        validate_digital_reference_lead(
+            self.reference, self.digital_reference_lead, checkpoint_lead
+        )
         self.program = NoiseProgram(cfg.get("noise", {}), self.fs)
+        self.digital_reference_buffer = DigitalReferenceBuffer(self.digital_reference_lead)
 
         dc_r = float(cfg["hardware"].get("dc_blocker_r", 0.995))
         self.err_dc, self.ref_dc = DCBlocker(dc_r), DCBlocker(dc_r)
@@ -75,12 +172,15 @@ class RealtimeANC:
         safety_cfg = cfg.get("safety", {})
         self.safety = SafetySupervisor(safety_cfg, self.fs, self.block)
         fade = int(float(safety_cfg.get("fade_ms", 20.0)) * self.fs / 1000.0)
-        self.state = RuntimeState(start_on=bool(cfg.get("start_on", False)))
-        self.anc_gate = FadeGate(fade, initial=1.0 if self.state.anc_enabled else 0.0)
+        self._fade_samples = fade
+        self.state = RuntimeState(start_on=False)
+        self.anc_gate = FadeGate(fade, initial=0.0)
         self.noise_gate = FadeGate(max(fade, int(0.1 * self.fs)), initial=0.0)
         self.noise_gate.set_target(1.0)
 
-        self.in_ring = SPSCRing(3, self.hop * 64)      # err, ref_mic, ref_digital
+        # 네 번째 채널은 callback이 판정한 FxLMS 적응 허용 플래그다. 가중치
+        # 소유자인 추론 스레드만 이 플래그를 읽어 adapt 상태를 바꾼다.
+        self.in_ring = SPSCRing(4, self.hop * 64)      # err, ref_mic, ref_digital, adapt
         self.out_ring = SPSCRing(1, self.hop * 64)
 
         self.err_meter = PowerEMA(self.fs, 0.4)
@@ -89,7 +189,8 @@ class RealtimeANC:
         self.baseline_init = False
         self.step_times_ms: list[float] = []
         self.xruns = 0
-        self._last_anc = self.state.anc_enabled
+        self._last_anc = False
+        self._adaptation_hold_samples = 0
 
         self.record_len = int(record_seconds * self.fs)
         self.rec_pos = 0
@@ -120,9 +221,15 @@ class RealtimeANC:
 
             noise_gain = self.noise_gate.process(frames)
             self.noise_gate.set_target(1.0 if self.state.noise_enabled else 0.0)
-            source = self.program.generate(frames) * noise_gain
-
-            self.in_ring.push(np.stack([err, ref_mic, source]))
+            # 자기생성 소스는 지금 만든 신호를 ref로 즉시 공급하고, 실제 ch0 재생만
+            # lead만큼 늦춘다. 게이트도 같은 FIFO를 통과시켜 ON/OFF 전환 중에도
+            # ref[t] == source[t+lead] 정렬을 보존한다 (digital-ref 전용).
+            future_source = self.program.generate(frames) * noise_gain
+            played, future = self.digital_reference_buffer.process(
+                np.stack([future_source, noise_gain])
+            )
+            source, played_noise_gain = played
+            ref_digital = future[0]
 
             # 백로그가 1 hop 을 넘으면 최신으로 재동기 — 언더런에 의한 지연 누적 방지 (#9)
             y_blk, had_data = self.out_ring.pop_latest(frames, keep_backlog=frames)
@@ -130,6 +237,13 @@ class RealtimeANC:
 
             if self.state.anc_enabled != self._last_anc:
                 self.anc_gate.set_target(1.0 if self.state.anc_enabled else 0.0)
+                if self.state.anc_enabled:
+                    secondary_total = int(
+                        getattr(self.engine, "secondary_total_length", 0)
+                    )
+                    self._adaptation_hold_samples = secondary_total + self._fade_samples
+                else:
+                    self._adaptation_hold_samples = 0
                 self._last_anc = self.state.anc_enabled
             gain = self.anc_gate.process(frames)
             control = y_lim * gain
@@ -143,7 +257,7 @@ class RealtimeANC:
             ctrl_power = self.ctrl_meter.update(control)
 
             # 베이스라인: ANC 게이트가 닫혀 있고 소음이 켜진 구간의 에러 파워
-            if float(np.max(gain)) <= 0.001 and float(np.min(noise_gain)) >= 0.999:
+            if float(np.max(gain)) <= 0.001 and float(np.min(played_noise_gain)) >= 0.999:
                 alpha = float(np.exp(-frames / (self.fs * 1.0)))
                 if not self.baseline_init:
                     self.baseline_power = err_power
@@ -159,6 +273,34 @@ class RealtimeANC:
                 self.state.anc_enabled = False
             for msg in self.safety.drain_messages():
                 self.state.messages.put(msg)
+
+            if self._adaptation_hold_samples > 0:
+                self._adaptation_hold_samples = max(
+                    0, self._adaptation_hold_samples - frames
+                )
+            full_anc_gain = bool(gain.size and float(np.min(gain)) >= 0.999)
+            full_noise_gain = bool(
+                played_noise_gain.size and float(np.min(played_noise_gain)) >= 0.999
+            )
+            input_clip_fraction = float(
+                np.mean(np.abs(mics[:, self.ch_err]) >= 0.98)
+            )
+            selected_reference = ref_digital if self.reference == "digital" else ref_mic
+            reference_power = float(
+                np.mean(selected_reference.astype(np.float64) ** 2)
+            )
+            adapt_allowed = fxlms_adaptation_allowed(
+                requested=self.state.anc_enabled and not mute,
+                full_anc_gain=full_anc_gain,
+                full_noise_gain=full_noise_gain,
+                hold_samples=self._adaptation_hold_samples,
+                output_clip_fraction=clip_frac,
+                input_clip_fraction=input_clip_fraction,
+                reference_power=reference_power,
+                stream_ok=not bool(status) and had_data,
+            )
+            adapt_gate = np.full(frames, float(adapt_allowed), dtype=np.float32)
+            self.in_ring.push(np.stack([err, ref_mic, ref_digital, adapt_gate]))
 
             if self.rec is not None and self.rec_pos < self.record_len:
                 n = min(frames, self.record_len - self.rec_pos)
@@ -178,6 +320,8 @@ class RealtimeANC:
                 "err_dbfs": power_to_db(err_power),
                 "ctrl_dbfs": power_to_db(ctrl_power),
                 "reduction_db": reduction,
+                "fxlms_adapt_allowed": adapt_allowed,
+                "fxlms_adapt_hold_samples": self._adaptation_hold_samples,
                 "underruns": self.out_ring.underruns,
                 "drops": self.out_ring.drops,
                 "xruns": self.xruns,
@@ -211,10 +355,13 @@ class RealtimeANC:
             blk, ok = self.in_ring.pop_latest(self.hop, keep_backlog=self.hop * 8)
             if not ok:
                 continue
-            err, ref_mic, ref_digital = blk
+            err, ref_mic, ref_digital, adapt_gate = blk
             ref = ref_digital if self.reference == "digital" else ref_mic
             t0 = time.perf_counter()
             try:
+                set_adapt = getattr(self.engine, "set_adapt_enabled", None)
+                if set_adapt is not None:
+                    set_adapt(bool(np.all(adapt_gate >= 0.5)))
                 y = self.engine.step(ref.copy(), err.copy())
             except Exception as exc:
                 self.state.messages.put(f"엔진 오류: {exc!r} — 무음 출력")
@@ -238,7 +385,7 @@ class RealtimeANC:
             device=(self.in_dev, self.out_dev),
             channels=(2, 2),
             dtype=("int32", "int16"),
-            latency=("low", "low"),
+            latency=(self.latency, self.latency),
             callback=self._callback,
             prime_output_buffers_using_stream_callback=True,
         )
@@ -417,6 +564,12 @@ def main() -> int:
     parser.add_argument("--record", default=None, help="세션 npz 저장 경로")
     parser.add_argument("--calibrate", action="store_true", help="실효 지연 측정 모드")
     parser.add_argument("--list-devices", action="store_true")
+    parser.add_argument(
+        "--input-probe-seconds",
+        type=float,
+        default=2.0,
+        help="스피커 출력 전 무출력 마이크 사전점검 길이",
+    )
     args = parser.parse_args()
 
     if args.list_devices:
@@ -424,6 +577,12 @@ def main() -> int:
         return 0
 
     cfg = load_runtime_config(args.config, args.overrides)
+    try:
+        if not input_preflight(cfg, seconds=args.input_probe_seconds):
+            return 2
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"[중단] 입력 사전점검 실패: {exc}", file=sys.stderr)
+        return 2
     if args.calibrate:
         return run_calibrate(cfg)
     run_seconds = args.run_seconds if args.run_seconds is not None else float(cfg.get("run_seconds", 0.0))

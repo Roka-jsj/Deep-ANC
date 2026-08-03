@@ -14,12 +14,23 @@ import numpy as np
 
 class InferenceEngine(Protocol):
     hop: int
+    digital_reference_lead_samples: int | None
 
     def reset(self) -> None: ...
 
     def step(self, ref: np.ndarray, err: np.ndarray) -> np.ndarray:
         """ref/err: (hop,) float32 → anti-noise (hop,) float32."""
         ...
+
+
+def checkpoint_digital_reference_lead_samples(state: dict) -> int:
+    """체크포인트의 학습 lead를 반환한다 (기존 artifact는 lead=0 호환)."""
+    cfg = state.get("cfg", {}) or {}
+    if "digital_reference_lead_samples" in cfg:
+        return int(cfg["digital_reference_lead_samples"])
+    # 개발 중 full cfg를 저장했던 임시 artifact도 읽을 수 있게 한다.
+    data_cfg = cfg.get("data", {}) or {}
+    return int(data_cfg.get("digital_reference_lead_samples", 0))
 
 
 def _load_ckpt_model(ckpt_path: str | Path):
@@ -30,6 +41,7 @@ def _load_ckpt_model(ckpt_path: str | Path):
     state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     model = build_model(state["cfg"]["model"])
     model.load_state_dict(state["model"])
+    model.digital_reference_lead_samples = checkpoint_digital_reference_lead_samples(state)
     return model.eval()
 
 
@@ -44,6 +56,9 @@ class TorchEngine:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         self.model = _load_ckpt_model(ckpt).to(device)
+        self.digital_reference_lead_samples = int(
+            self.model.digital_reference_lead_samples
+        )
         self._torch = torch
         self.reset()
 
@@ -74,6 +89,10 @@ class OrtEngine:
         self.sess = ort.InferenceSession(str(onnx_path), so, providers=["CPUExecutionProvider"])
         meta_path = Path(onnx_path).with_suffix(".json")
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        # key가 없는 기존 ONNX artifact는 기존 정렬인 lead=0으로 호환한다.
+        self.digital_reference_lead_samples = int(
+            meta.get("digital_reference_lead_samples", 0)
+        )
         self.state_names: list[str] = meta["state_names"]
         self._init_shapes = {
             i.name: (i.shape, np.float32) for i in self.sess.get_inputs() if i.name != "x"
@@ -129,6 +148,9 @@ class TrtEngine:
 
         meta_path = Path(onnx_meta) if onnx_meta else Path(plan).with_suffix(".json")
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.digital_reference_lead_samples = int(
+            meta.get("digital_reference_lead_samples", 0)
+        )
         self.state_names: list[str] = meta["state_names"]
 
         err_code, self.stream = cudart.cudaStreamCreate()
@@ -195,27 +217,52 @@ class TrtEngine:
 class FxLMSEngine:
     """FxLMS 폴백/베이스라인 — anc_project 검증 구현 사용."""
 
-    def __init__(self, secondary_npz: str, fxlms_cfg: dict, hop: int = 256) -> None:
+    def __init__(
+        self,
+        secondary_npz: str,
+        fxlms_cfg: dict,
+        hop: int = 256,
+        handoff_extra_samples: int | None = None,
+    ) -> None:
         from ..baselines.fxlms_core import FxLMSController, load_secondary_path
 
         self.hop = int(hop)
+        if self.hop <= 0:
+            raise ValueError("FxLMS hop은 양수여야 합니다")
+        # RealtimeANC는 입력 블록을 추론 스레드로 넘기고 다음 콜백에서 y를
+        # 재생하므로 직접-callback legacy 구현보다 정확히 1 hop이 더 늦다.
+        handoff = self.hop if handoff_extra_samples is None else int(handoff_extra_samples)
+        if handoff < 0:
+            raise ValueError("FxLMS handoff_extra_samples는 0 이상이어야 합니다")
         model = load_secondary_path(secondary_npz)
+        self.handoff_extra_samples = handoff
+        self.secondary_delay_samples = int(model.delay_samples) + handoff
+        self.secondary_total_length = self.secondary_delay_samples + int(model.fir.size)
         self.controller = FxLMSController(
             model.fir,
-            secondary_delay_samples=model.delay_samples,
+            secondary_delay_samples=self.secondary_delay_samples,
             control_len=int(fxlms_cfg.get("control_length", 256)),
             mu=float(fxlms_cfg.get("mu", 0.05)),
             leakage=float(fxlms_cfg.get("leakage", 1.0e-6)),
             weight_norm_limit=float(fxlms_cfg.get("weight_norm_limit", 20.0)),
         )
-        self.adapt = True
+        # 학습 체크포인트가 없는 적응 필터이므로 runtime lead를 별도로 제한하지 않는다.
+        self.digital_reference_lead_samples = None
+        # ANC OFF 베이스라인 중 가중치가 몰래 누적되지 않도록 fail-closed로 시작한다.
+        self.adapt = False
+        self.last_adaptation = None
 
     def reset(self) -> None:
         self.controller.reset(reset_histories=True)
+        self.adapt = False
+        self.last_adaptation = None
+
+    def set_adapt_enabled(self, enabled: bool) -> None:
+        self.adapt = bool(enabled)
 
     def step(self, ref: np.ndarray, err: np.ndarray) -> np.ndarray:
         y = self.controller.generate_block(ref)
-        self.controller.adapt_block(err, enabled=self.adapt)
+        self.last_adaptation = self.controller.adapt_block(err, enabled=self.adapt)
         return y
 
 
@@ -230,8 +277,21 @@ def build_engine(runtime_cfg: dict) -> InferenceEngine:
     """runtime.yaml 로 엔진 구성. controller=fxlms 면 FxLMSEngine."""
     hop = int(runtime_cfg.get("hop", 256))
     if runtime_cfg.get("controller", "dl") == "fxlms":
+        handoff = int(
+            runtime_cfg.get("duct", {})
+            .get("secondary_path", {})
+            .get("handoff_extra_samples", hop)
+        )
+        if handoff != hop:
+            raise ValueError(
+                "실시간 FxLMS의 handoff_extra_samples는 실제 1-hop 파이프라인과 "
+                f"같아야 합니다: 설정={handoff}, hop={hop}"
+            )
         return FxLMSEngine(
-            secondary_path_npz(runtime_cfg), runtime_cfg.get("fxlms", {}), hop=hop
+            secondary_path_npz(runtime_cfg),
+            runtime_cfg.get("fxlms", {}),
+            hop=hop,
+            handoff_extra_samples=handoff,
         )
     eng = runtime_cfg.get("engine", {})
     kind = str(eng.get("type", "torch"))
