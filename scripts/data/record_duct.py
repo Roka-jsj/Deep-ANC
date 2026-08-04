@@ -67,6 +67,15 @@ def main() -> int:
             "생략 시 현재 세션만의 ID 사용"
         ),
     )
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=1.0,
+        help=(
+            "스트림을 연 뒤 무음으로 흘려보내고 버릴 길이. I2S 기동 트랜지언트가 "
+            "약 0.5초 지속되므로 여유를 둔 1.0초가 기본값"
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="ref 마이크 무신호여도 진행")
     parser.add_argument("--ref-check-dbfs", type=float, default=-80.0)
     args = parser.parse_args()
@@ -90,9 +99,14 @@ def main() -> int:
 
     # ----- 1) 레퍼런스 마이크 자가진단 (2초 무음 캡처) -----
     print("레퍼런스 마이크 점검 중 (2초)...")
-    probe = sd.rec(int(2 * fs), samplerate=fs, channels=2, dtype="int32", device=in_dev)
+    # 앞 1초는 기동 트랜지언트라 버린다. 이걸 포함해서 재면 무신호 마이크도 -42dBFS 로
+    # 보여 "살아 있다"고 오판한다 — 이 점검의 목적을 정확히 무력화한다.
+    probe_settle = int(1.0 * fs)
+    probe = sd.rec(
+        probe_settle + int(2 * fs), samplerate=fs, channels=2, dtype="int32", device=in_dev
+    )
     sd.wait()
-    probe_f = pcm_int32_to_float32(probe)
+    probe_f = pcm_int32_to_float32(probe[probe_settle:])
     err_db = rms_dbfs(probe_f[:, 0])
     ref_db = rms_dbfs(probe_f[:, 1])
     print(f"  ch0(err) {err_db:7.2f} dBFS | ch1(ref) {ref_db:7.2f} dBFS")
@@ -114,16 +128,29 @@ def main() -> int:
     }
     program = NoiseProgram(prog_cfg, fs)
 
-    total = int(args.seconds * fs)
+    # I2S 입력은 스트림을 연 직후 약 0.5초 동안 큰 기동 트랜지언트를 낸다
+    # (실측: 0.0-0.5초 -36.3 dBFS peak 0.062 → 0.5초 이후 -67.4 dBFS peak 0.002).
+    # 이 구간을 세션에 남기면 (a) 학습 데이터 앞머리가 잡음이 되고 (b) 세션 QA 의
+    # peak/RMS 통계가 트랜지언트를 재게 된다. 무음으로 흘려보내고 잘라낸다.
+    # 출력과 입력을 같은 길이만큼 버리므로 정렬은 유지된다.
+    settle = int(max(0.0, args.settle_seconds) * fs)
+    keep = int(args.seconds * fs)
+    total = keep + settle
     source = np.zeros(total, dtype=np.float32)
     recorded = np.zeros((total, 2), dtype=np.float32)
     cursor = {"in": 0, "out": 0}
+    xrun_state: dict = {"count": 0, "flags": set()}
 
     fade = np.linspace(0.0, 1.0, int(0.1 * fs), dtype=np.float32)
 
     def callback(indata, outdata, frames, _time, status):
         if status:
-            print(f"[xrun] {status}", file=sys.stderr)
+            # 콜백 안에서 print 하면 그 자체가 다음 xrun 을 만든다. 세어만 두고 밖에서 판정한다.
+            # xrun 은 source 와 mics 사이에 **영구 오프셋**을 남긴다 — 커서는 frames 만큼
+            # 계속 전진하므로 드롭된 블록만큼 두 배열이 세션 끝까지 어긋난다. lead 예산이
+            # 통째로 109 샘플인데 블록 1회 = 256 샘플이므로 학습 데이터로 쓸 수 없다.
+            xrun_state["count"] += 1
+            xrun_state["flags"].add(str(status))
         i = cursor["in"]
         n = min(frames, total - i)
         recorded[i : i + n] = pcm_int32_to_float32(indata[:n, :2])
@@ -131,13 +158,19 @@ def main() -> int:
 
         o = cursor["out"]
         blk = program.generate(frames)
-        # 시작/종료 페이드
+        # settle 구간은 무음으로 흘린다 — 프로그램 위상은 그대로 진행시켜 잘라낸 뒤에도
+        # source/mics 가 같은 시각을 가리키게 한다.
+        # 페이드는 settle 이 끝나는 시점을 0으로 삼는다.
         for k in range(frames):
             pos = o + k
-            if pos < fade.size:
-                blk[k] *= fade[pos]
-            elif pos >= total - fade.size:
-                blk[k] *= fade[max(0, total - 1 - pos)] if pos < total else 0.0
+            if pos < settle:
+                blk[k] = 0.0
+                continue
+            local = pos - settle
+            if local < fade.size:
+                blk[k] *= fade[local]
+            elif local >= keep - fade.size:
+                blk[k] *= fade[max(0, keep - 1 - local)] if local < keep else 0.0
         m = min(frames, total - o)
         source[o : o + m] = blk[:m]
         out = np.zeros((frames, 2), dtype=np.float32)
@@ -163,11 +196,22 @@ def main() -> int:
             time.sleep(0.1)
 
     # ----- 3) 저장 -----
+    # xrun 이 하나라도 있으면 source↔mics 정렬이 깨졌다. 전달맵은 이미 xrun 을 무효화
+    # 사유로 쓰는데(measure_duct_transfer_map) 학습데이터 수집기만 기준이 느슨했다.
+    if xrun_state["count"] > 0:
+        print(
+            f"[중단] 오디오 xrun {xrun_state['count']}회 ({', '.join(sorted(xrun_state['flags']))}) — "
+            "source 와 mics 의 정렬이 깨져 학습에 쓸 수 없습니다. 세션을 저장하지 않습니다.",
+            file=sys.stderr,
+        )
+        return 1
+
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     session_dir = REPO_ROOT / args.out_root / f"{stamp}_{args.program}"
     session_dir.mkdir(parents=True, exist_ok=True)
-    sf.write(session_dir / "mics.wav", recorded, fs, subtype="PCM_32")
-    sf.write(session_dir / "source.wav", source, fs, subtype="FLOAT")
+    # settle 구간을 양쪽에서 동일하게 잘라낸다 (정렬 유지).
+    sf.write(session_dir / "mics.wav", recorded[settle:], fs, subtype="PCM_32")
+    sf.write(session_dir / "source.wav", source[settle:], fs, subtype="FLOAT")
     session_id = validate_session_id(session_dir.name)
     group_id = requested_group_id or validate_group_id(session_id)
     meta = {

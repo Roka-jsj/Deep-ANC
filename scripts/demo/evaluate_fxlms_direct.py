@@ -46,6 +46,8 @@ DEFAULT_AMPLITUDE = 0.005
 MAX_AMPLITUDE = 0.02
 MAX_INPUT_CLIP_RATIO = 0.0
 MIN_PATH_REPEAT_CONSISTENCY = 0.90
+# I2S 기동 트랜지언트를 버리는 길이. deep_anc.audio_io.DEFAULT_PROBE_SETTLE_SECONDS 와 같은 근거.
+PROBE_SETTLE_SECONDS = 1.0
 FULL_GAIN_THRESHOLD = 0.999
 CONTROL_DIVERGENCE_MULTIPLIER = 10.0
 DEFAULT_MAX_TIMESTAMP_JITTER_MS = 1.0
@@ -277,23 +279,34 @@ def capture_raw_preflight(
     audio: dict[str, Any],
     seconds: float,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """출력 장치는 열지 않고 APE ERR/REF만 캡처한다."""
+    """출력 장치는 열지 않고 APE ERR/REF만 캡처한다.
+
+    앞 1초는 I2S 기동 트랜지언트라 버린다 — 포함하면 무신호 마이크도 -42dBFS 로 보여
+    생존 판정을 통과한다(deep_anc.audio_io.capture_input_probe 주석 참조).
+    """
     sample_rate = int(audio["sample_rate"])
     input_cfg = audio["input"]
     input_device = resolve_alsa_portaudio_device(
         input_cfg["card"], input_cfg["pcm"], "input", 2
     )
+    settle_frames = int(round(PROBE_SETTLE_SECONDS * sample_rate))
     raw = sd.rec(
-        int(round(float(seconds) * sample_rate)),
+        settle_frames + int(round(float(seconds) * sample_rate)),
         samplerate=sample_rate,
         channels=2,
         dtype="int32",
         device=input_device,
     )
     sd.wait()
-    raw = np.asarray(raw, dtype=np.int32)
+    raw = np.asarray(raw, dtype=np.int32)[settle_frames:]
     report = analyze_raw_probe(raw)
-    report.update({"device": int(input_device), "sample_rate": sample_rate})
+    report.update(
+        {
+            "device": int(input_device),
+            "sample_rate": sample_rate,
+            "settle_seconds": PROBE_SETTLE_SECONDS,
+        }
+    )
     return raw, report
 
 

@@ -164,25 +164,40 @@ def analyze_int32_input_probe(
     return {"frames": int(raw.shape[0]), "channels": channels}
 
 
+# I2S 입력은 스트림을 연 직후 큰 기동 트랜지언트를 낸다 — 실측으로 0.0-0.5초 구간이
+# RMS -36.3 dBFS / peak 0.062 이고, 0.3초쯤부터 정상 바닥(-67.4 dBFS / peak 0.002)으로
+# 내려온다. 이 구간을 버리지 않으면 **이 함수의 목적 자체가 무너진다**: 트랜지언트만으로
+# RMS 가 -42 dBFS 로 나오므로, 신호가 전혀 없는 죽은 마이크도 min_rms_dbfs(-80) 게이트를
+# 통과한다. 실제로 저장소의 "잡음 바닥 -42 ~ -46 dBFS" 기록은 전부 이 트랜지언트였다
+# (2초 창 예측 -42.31 vs 로그 -42.34/-42.40/-42.49, 5초 창 예측 -46.27 vs 문서 -46.33).
+DEFAULT_PROBE_SETTLE_SECONDS = 1.0
+
+
 def capture_input_probe(
     audio_cfg: dict,
     *,
     seconds: float = 2.0,
+    settle_seconds: float = DEFAULT_PROBE_SETTLE_SECONDS,
     min_rms_dbfs: float = -80.0,
     max_clip_ratio: float = 0.005,
 ) -> dict:
-    """출력 장치를 열지 않고 설정된 APE 입력만 캡처해 분석한다."""
+    """출력 장치를 열지 않고 설정된 APE 입력만 캡처해 분석한다.
+
+    ``settle_seconds`` 만큼 더 캡처해서 앞부분을 버린다. 판정에 쓰는 것은 그 뒤 구간이다.
+    """
     import sounddevice as sd
 
     fs = int(audio_cfg["sample_rate"])
     if seconds <= 0.0:
         raise ValueError("probe seconds는 양수여야 합니다")
+    settle = max(0.0, float(settle_seconds))
     input_cfg = audio_cfg["input"]
     device = resolve_alsa_portaudio_device(
         input_cfg["card"], input_cfg["pcm"], "input", 2
     )
+    settle_frames = int(round(settle * fs))
     raw = sd.rec(
-        int(round(float(seconds) * fs)),
+        settle_frames + int(round(float(seconds) * fs)),
         samplerate=fs,
         channels=2,
         dtype="int32",
@@ -190,9 +205,16 @@ def capture_input_probe(
     )
     sd.wait()
     report = analyze_int32_input_probe(
-        raw,
+        raw[settle_frames:],
         min_rms_dbfs=min_rms_dbfs,
         max_clip_ratio=max_clip_ratio,
     )
-    report.update({"device": int(device), "sample_rate": fs})
+    report.update(
+        {
+            "device": int(device),
+            "sample_rate": fs,
+            "settle_seconds": settle,
+            "analyzed_seconds": float(seconds),
+        }
+    )
     return report

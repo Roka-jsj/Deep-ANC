@@ -37,6 +37,7 @@ from scipy import signal
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from deep_anc.audio_io import (  # noqa: E402
+    DEFAULT_PROBE_SETTLE_SECONDS,
     analyze_int32_input_probe,
     float32_to_pcm_int16,
     pcm_int32_to_float32,
@@ -188,27 +189,38 @@ def _new_diagnostics_dir(root: Path, output_channel: str) -> Path:
 
 
 def _capture_preflight(sd: Any, audio: dict, seconds: float) -> tuple[np.ndarray, dict]:
-    """출력 장치를 열기 전에 두 마이크의 원시 S32_LE를 캡처한다."""
+    """출력 장치를 열기 전에 두 마이크의 원시 S32_LE를 캡처한다.
+
+    앞 ``DEFAULT_PROBE_SETTLE_SECONDS`` 는 I2S 기동 트랜지언트라 버린다 — 포함해서 재면
+    무신호 마이크도 -42dBFS 로 보여 생존 판정을 통과한다(audio_io.capture_input_probe 주석 참조).
+    """
     fs = int(audio["sample_rate"])
     input_cfg = audio["input"]
     in_dev = resolve_alsa_portaudio_device(
         input_cfg["card"], input_cfg["pcm"], "input", 2
     )
+    settle_frames = int(round(DEFAULT_PROBE_SETTLE_SECONDS * fs))
     raw = sd.rec(
-        int(round(seconds * fs)),
+        settle_frames + int(round(seconds * fs)),
         samplerate=fs,
         channels=2,
         dtype="int32",
         device=in_dev,
     )
     sd.wait()
-    raw = np.asarray(raw, dtype=np.int32)
+    raw = np.asarray(raw, dtype=np.int32)[settle_frames:]
     report = analyze_int32_input_probe(
         raw,
         min_rms_dbfs=-80.0,
         max_clip_ratio=MAX_INPUT_CLIP_RATIO,
     )
-    report.update({"device": int(in_dev), "sample_rate": fs})
+    report.update(
+        {
+            "device": int(in_dev),
+            "sample_rate": fs,
+            "settle_seconds": DEFAULT_PROBE_SETTLE_SECONDS,
+        }
+    )
     return raw, report
 
 
