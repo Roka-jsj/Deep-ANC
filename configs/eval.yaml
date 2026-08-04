@@ -10,13 +10,27 @@ trusted_band_hz: [150, 600]
 # 시나리오는 프로젝트 절대 목표 2가지를 분리 측정한다:
 #   기능1(저주파+고주파 노이즈 제거): tone300/multitone/band(저역) + hf_tone/hf_band(고역)
 #   기능2(모든 소리 제거): nonlinear + file(음성/음악 wav 재생 — --set noise.file 지정)
+# measure_band_hz: **그 시나리오의 소스가 실제로 에너지를 갖는 대역**이다.
+# 이것을 두지 않고 모든 시나리오를 trusted_band(150-600Hz)로 재면, 소스가 그 대역에 없는
+# 고역 시나리오는 잡음을 재게 된다 — 실측으로 hf_tone 은 trusted 대역 에너지가 0.47%,
+# hf_band 는 0.12% 였고, 그때 나온 "-1.50 dB(증폭)" 은 신호가 아니라 잡음이었다.
+# (같은 구간을 소스 대역에서 다시 재면 +0.46 dB 로 증폭이 아니라 무반응이다.)
 scenarios:                      # scripts/demo/evaluate_session.py 시나리오
-  - {name: tone300,   noise: {type: tone, frequency: 300, amplitude: 0.05}}
-  - {name: multitone, noise: {type: multitone, frequencies: [120, 300, 750], amplitude: 0.04}}
-  - {name: band,      noise: {type: band, band: [80, 1000], amplitude: 0.05}}
-  - {name: hf_tone,   noise: {type: tone, frequency: 1200, amplitude: 0.04}}   # 고역(컷오프 이하)
-  - {name: hf_band,   noise: {type: band, band: [800, 1600], amplitude: 0.04}} # 고역 대역 — S(z) 재보정 후 유효
-  - {name: nonlinear, noise: {type: nonlinear, frequency: 210, amplitude: 0.06}}
+  - {name: tone300,   measure_band_hz: [250, 350],
+     noise: {type: tone, frequency: 300, amplitude: 0.05}}
+  - {name: multitone, measure_band_hz: [100, 800],
+     noise: {type: multitone, frequencies: [120, 300, 750], amplitude: 0.04}}
+  - {name: band,      measure_band_hz: [80, 1000],
+     noise: {type: band, band: [80, 1000], amplitude: 0.05}}
+  - {name: hf_tone,   measure_band_hz: [1150, 1250],    # 고역(컷오프 이하)
+     noise: {type: tone, frequency: 1200, amplitude: 0.04}}
+  - {name: hf_band,   measure_band_hz: [800, 1600],     # S(z) 광대역 재보정 후 유효
+     noise: {type: band, band: [800, 1600], amplitude: 0.04}}
+  - {name: nonlinear, measure_band_hz: [150, 900],
+     noise: {type: nonlinear, frequency: 210, amplitude: 0.06}}
+
+# 측정 대역에 소스 에너지가 이 비율 미만이면 headline 감쇠를 발행하지 않는다.
+min_source_energy_fraction_in_measure_band: 0.5
 
 protocol:
   baseline_seconds: 10          # ANC OFF 베이스라인

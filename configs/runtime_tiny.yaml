@@ -1,0 +1,62 @@
+# 배포 후보 런타임 — hybrid_anc_tiny + ONNX Runtime.
+#
+# base 와 tiny 를 동일 held-out 조건에서 비교한 결과 tiny 가 7/7 소스에서 앞섰고
+# 최악 소스 fullband 도 base +13.89dB 대비 tiny +4.06dB 로 안전했다. 따라서 실기
+# 런타임의 기본 후보는 tiny 다 (근거: runs/pretrain_{base,tiny}_corrected/eval_final_*).
+#
+# ⚠ 이 checkpoint 의 physics_status 는 secondary_surrogate_representation_pretrain 이다.
+# P(z)=S(z) 대용품으로 학습했으므로 **실측 덕트 성능을 주장할 수 없다.** 실측 P/S 로
+# 파인튜닝하기 전까지 이 설정으로 얻는 수치는 "표현 사전학습 모델을 실기에 걸었을 때
+# 무슨 일이 일어나는가"의 관측치일 뿐이다.
+#
+# 실행: .venv/bin/python -m deep_anc.realtime.run_realtime --config configs/runtime_tiny.yaml
+
+hardware_config: configs/hardware_jetson.yaml
+duct_config: configs/duct.yaml
+
+hop: 256
+reference: digital
+controller: dl
+
+# (S 순수지연 1342 + 스레드 핸드오프 256) − D_noise 1489 = 109.
+# checkpoint/ONNX 메타와 불일치하면 오디오를 열기 전에 거부된다.
+digital_reference_lead_samples: 109
+
+engine:
+  type: ort
+  ckpt: runs/pretrain_tiny_corrected/ckpt/best.pt
+  onnx: runs/export/tiny_corrected.onnx
+  plan: runs/export/tiny_fp16.plan
+  cpu_affinity: [4, 5, 6, 7]
+
+fxlms:
+  control_length: 256
+  mu: 0.05
+  leakage: 1.0e-6
+  weight_norm_limit: 20.0
+
+safety:
+  # 0.2 는 임의의 값이 아니라 **모델 자체의 소프트 리미터와 같은 값**이다
+  # (model_*.yaml limiter.limit=0.2 → 출력은 항상 0.2·tanh(y/0.2), 즉 |y|<0.2).
+  # 이보다 낮추면 런타임 리미터가 모델을 자기 자신에게 클립시키고, clip_streak_mute
+  # (연속 20블록=106ms)가 ANC 를 켜자마자 꺼버린다. 실제로 그렇게 됐다 —
+  # 0.05 에서는 유효구간 0.0%, 0.15 에서도 band 시나리오가 93.3% 로 게이트 미달이었다.
+  # 과출력 보호는 이 값이 아니라 발산 워치독(에러파워 ×4가 0.5초 지속 → 자동 mute)이 한다.
+  control_limit: 0.2
+  fade_ms: 20
+  clip_streak_mute: 20
+  divergence_ratio: 4.0
+  divergence_hold_s: 0.5
+  deadline_miss_mute: 3
+
+noise:
+  type: band
+  frequency: 300.0
+  amplitude: 0.03
+  band: [80.0, 1000.0]
+  file: null
+  seed: 20260801
+
+record: null
+run_seconds: 0.0
+start_on: false

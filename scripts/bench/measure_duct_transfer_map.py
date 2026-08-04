@@ -21,6 +21,7 @@ NPZ/JSON/Markdown과 선택 PNG로 ``results/duct_transfer_map`` 아래에 저�
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import json
 import math
@@ -144,6 +145,10 @@ def output_paths(prefix: str | None, *, include_plot: bool) -> dict[str, Path]:
         "npz": base.with_suffix(".npz"),
         "json": base.with_suffix(".json"),
         "markdown": base.with_suffix(".md"),
+        # 판정을 뒤집는 것은 항상 **반복별 개별 관측치**(onset, TDOA, coherence)다.
+        # 그 값이 중첩 JSON 안에만 있으면 실행 간 비교를 사람이 손으로 해야 한다.
+        "paths_csv": base.with_name(base.name + "_paths").with_suffix(".csv"),
+        "repeats_csv": base.with_name(base.name + "_repeats").with_suffix(".csv"),
     }
     if include_plot:
         paths["plot"] = base.with_suffix(".png")
@@ -1922,6 +1927,103 @@ def render_markdown(metadata: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_path_rows(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    """경로(4종)당 한 행 — 판정과 그 판정을 만든 수치를 한 표에 모은다."""
+
+    rows: list[dict[str, Any]] = []
+    for key in PATH_ORDER:
+        path = (metadata.get("paths") or {}).get(key)
+        if not isinstance(path, dict):
+            continue
+        absolute = path.get("absolute_delay") or {}
+        snr = path.get("driven_response_snr") or {}
+        rows.append({
+            "path": key,
+            "label": PATH_LABELS.get(key, key),
+            "valid": bool(path.get("valid")),
+            "coherence_median": path.get("coherence_median_in_measurement_band"),
+            "min_required_coherence": MIN_BAND_COHERENCE,
+            "onset_median_samples": absolute.get("callback_frame_onset_median_samples"),
+            "onset_spread_samples": absolute.get("callback_frame_onset_spread_samples"),
+            "max_allowed_onset_spread_samples": absolute.get(
+                "max_allowed_callback_delay_spread_samples"
+            ),
+            "onset_stable": absolute.get("stable"),
+            "timestamp_corrected_median_samples": absolute.get(
+                "timestamp_corrected_median_samples"
+            ),
+            "timestamp_corrected_spread_ms": absolute.get("timestamp_corrected_spread_ms"),
+            "driven_snr_valid": snr.get("valid"),
+        })
+    return rows
+
+
+def build_repeat_rows(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    """반복 × 경로마다 한 행 — 요약값이 아니라 **개별 관측치**를 남긴다.
+
+    coherence 가 낮을 때 원인이 레벨인지 반복 간 지연 흔들림인지는 이 계열을 봐야 갈린다.
+    요약만 남기면 그 판별이 불가능해진다.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for key in PATH_ORDER:
+        path = (metadata.get("paths") or {}).get(key)
+        if not isinstance(path, dict):
+            continue
+        onsets = list((path.get("absolute_delay") or {}).get(
+            "repeat_callback_frame_onset_samples"
+        ) or [])
+        models = list(path.get("repeat_model_delay_samples") or [])
+        corrected = list((path.get("absolute_delay") or {}).get(
+            "timestamp_corrected_dac_to_adc_path_samples"
+        ) or [])
+        for index in range(max(len(onsets), len(models), len(corrected))):
+            rows.append({
+                "path": key,
+                "repeat": index,
+                "onset_samples": onsets[index] if index < len(onsets) else "",
+                "model_delay_samples": models[index] if index < len(models) else "",
+                "timestamp_corrected_samples": (
+                    corrected[index] if index < len(corrected) else ""
+                ),
+            })
+    for key, tdoa in (metadata.get("relative_tdoa") or {}).items():
+        if not isinstance(tdoa, dict):
+            continue
+        lags = list(tdoa.get("repeat_lag_err_minus_ref_samples") or [])
+        scores = list(tdoa.get("repeat_confidence_peak_ratio") or [])
+        err_rms = list(tdoa.get("repeat_err_band_rms_dbfs") or [])
+        ref_rms = list(tdoa.get("repeat_ref_band_rms_dbfs") or [])
+        for index, lag in enumerate(lags):
+            rows.append({
+                "path": f"tdoa_{key}",
+                "repeat": index,
+                "tdoa_err_minus_ref_samples": lag,
+                "gcc_confidence": scores[index] if index < len(scores) else "",
+                "min_required_confidence": tdoa.get("minimum_required_confidence_peak_ratio"),
+                "err_band_rms_dbfs": err_rms[index] if index < len(err_rms) else "",
+                "ref_band_rms_dbfs": ref_rms[index] if index < len(ref_rms) else "",
+            })
+    return rows
+
+
+def _write_csv_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    columns: list[str] = []
+    for row in rows:
+        for name in row:
+            if name not in columns:
+                columns.append(name)
+    with path.open("x", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def save_artifacts(
     paths: dict[str, Path],
     *,
@@ -1965,6 +2067,16 @@ def save_artifacts(
         for key in ("npz", "json", "markdown"):
             os.link(temporary[key], core[key])
             published.append(core[key])
+        # CSV 는 파생물이다. 실패해도 핵심 산출물을 잃지 않도록 publish 뒤에 쓰고,
+        # 실패하면 경고만 남긴다 — 측정은 스피커를 다시 울려야 얻는다.
+        for key, builder in (("paths_csv", build_path_rows), ("repeats_csv", build_repeat_rows)):
+            target = paths.get(key)
+            if target is None:
+                continue
+            try:
+                _write_csv_rows(target, builder(metadata))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[경고] {key} 생성 실패(핵심 산출물은 저장됨): {exc}", file=sys.stderr)
     except Exception:
         for path in reversed(published):
             path.unlink(missing_ok=True)

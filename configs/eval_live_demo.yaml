@@ -1,0 +1,28 @@
+# 실기 시연 — "소음 섞인 소리 10초 → ANC 켜기"
+#
+# scripts/demo/evaluate_session.py 가 이 파일을 읽어 OFF 10초 → ON 20초 → OFF 5초 를
+# 자동 진행하고, 같은 배율의 WAV 와 CSV 를 남긴다. 사람이 키를 누르지 않으므로 켠 시각이
+# 정확히 기록되고 OFF/ON 구간 비교가 재현 가능하다.
+#
+# 소스는 음성 + 80-800Hz 덕트 소음 혼합이다(results/demo_source/voice_in_duct_noise.wav).
+# 소음을 지배적으로(0.65 : 0.35) 섞은 이유는 상쇄가 귀에 들려야 하기 때문이다.
+
+octave_bands_hz: [125, 250, 500, 1000, 2000, 4000, 8000]
+trusted_band_hz: [150, 600]
+heldout_sef_eta: 0.15
+report_dir: results
+
+min_source_energy_fraction_in_measure_band: 0.5
+
+scenarios:
+  - name: voice_in_noise
+    measure_band_hz: [80, 800]        # 소스가 실제로 에너지를 갖는 대역
+    noise:
+      type: file
+      file: results/demo_source/voice_in_duct_noise.wav
+      amplitude: 0.06                 # 녹음 세션과 같은 레벨 (trusted SNR 약 21dB)
+
+protocol:
+  baseline_seconds: 10                # ANC OFF — 요청하신 "10초간 소음"
+  on_seconds: 20                      # ANC ON
+  tail_seconds: 5                     # 다시 OFF (베이스라인 드리프트 확인용)

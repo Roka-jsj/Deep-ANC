@@ -1,0 +1,17 @@
+# 청취 데모 전용 시나리오 — scripts/demo/render_anc_demo.py 용
+# 실제 음성 + 덕트 소음을 섞어 "소음이 섞인 실제 소리"를 만든다.
+# 기능 2(모든 소리 제거)를 귀로 확인하기 위한 구성이다.
+octave_bands_hz: [125, 250, 500, 1000, 2000, 4000, 8000]
+trusted_band_hz: [150, 600]
+heldout_sef_eta: 0.15
+report_dir: results
+scenarios:
+  - name: speech_in_noise
+    wav: results/demo_source/voice.wav
+    wav_amplitude: 0.05
+    noise: {type: band, band: [80, 800], amplitude: 0.04}
+  - name: speech_only
+    wav: results/demo_source/voice.wav
+    wav_amplitude: 0.06
+  - name: duct_noise
+    noise: {type: band, band: [80, 800], amplitude: 0.06}
