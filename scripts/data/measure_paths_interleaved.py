@@ -97,6 +97,10 @@ DEFAULT_WARMUP_PERIODS = 4      # 순환 정상상태 도달 전 주기는 버�
 DEFAULT_REPEATS = 16
 # τ 는 재현되는 대역에서만 적합한다. 재현 안 되는 대역을 넣으면 그 잡음이 τ 를 끌고 간다.
 DEFAULT_FIT_BAND_HZ = (150.0, 1200.0)
+# 일관성을 **어느 대역에서 쟀는지**가 곧 이 모델을 어느 대역에서 믿을 수 있는가다.
+# 그래서 숫자만 저장하지 않고 대역도 함께 저장하고, 게이트가 그 대역이 요구 대역을
+# 덮는지 검사한다. 대역이 안 적혀 있으면 0.95 라는 숫자가 무엇에 대한 0.95 인지 모른다.
+DEFAULT_CONSISTENCY_BAND_HZ = (150.0, 600.0)
 
 MIN_TONE_SNR_DB = 12.0          # 톤 중앙값 SNR 하한
 MIN_TONE_SNR_FRACTION = 0.9     # 이 비율 이상의 톤이 하한을 넘어야 한다
@@ -124,6 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fit-band", type=float, nargs=2,
                         default=list(DEFAULT_FIT_BAND_HZ),
                         help="반복 정렬 τ 와 벌크 지연을 적합할 대역")
+    parser.add_argument("--consistency-band", type=float, nargs=2,
+                        default=list(DEFAULT_CONSISTENCY_BAND_HZ),
+                        help="official coherence_median 을 계산할 대역(아티팩트에 함께 기록)")
     parser.add_argument(
         "--min-alignment-score", type=float, default=0.5,
         help="이 신뢰도 미만인 반복은 τ 탐색 실패로 보고 버린다(개수는 산출물에 기록)",
@@ -197,6 +204,7 @@ def analyse_channel(
     pre_roll: int,
     max_delay_samples: int,
     fit_band_hz: tuple[float, float],
+    consistency_band_hz: tuple[float, float],
     min_alignment_score: float,
     min_kept_repeats: int,
 ) -> dict[str, Any]:
@@ -227,7 +235,15 @@ def analyse_channel(
             f"(최소 {int(min_kept_repeats)}, 신뢰도 하한 {min_alignment_score})"
         )
     aligned, taus_kept = aligned[keep], taus[keep]
-    consistency = complex_consistency(aligned)
+    band_mask = (frequencies >= float(consistency_band_hz[0])) & (
+        frequencies <= float(consistency_band_hz[1])
+    )
+    if int(band_mask.sum()) < 8:
+        raise ValueError(
+            f"일관성 대역 안의 톤이 부족합니다: {int(band_mask.sum())}개"
+        )
+    consistency = complex_consistency(aligned[:, band_mask])
+    fullband_consistency = complex_consistency(aligned)
     mean_transfer = aligned.mean(axis=0)
 
     # 지연 탐색 범위는 **복원 주기 안으로 제한해야 한다.** 이 채널은 bin_step 마다
@@ -263,6 +279,10 @@ def analyse_channel(
         "kept_mask": keep,
         "rejected_repeats": int(taus.size - taus_kept.size),
         "consistency": consistency,
+        "fullband_consistency": fullband_consistency,
+        "consistency_band_hz": (
+            float(consistency_band_hz[0]), float(consistency_band_hz[1])
+        ),
         "raw_consistency": complex_consistency(stack),
         "absolute_tau_spread": float(np.max(taus_kept) - np.min(taus_kept)),
         "delay_samples": integer_delay,
@@ -317,6 +337,10 @@ def _official_arrays(
         "delay_samples": np.int64(model["delay_samples"]),
         "sample_rate": np.int64(fs),
         "coherence_median": np.float64(consistency),
+        "consistency_band_hz": np.asarray(
+            model["consistency_band_hz"], dtype=np.float64
+        ),
+        "fullband_consistency": np.float64(model["fullband_consistency"]),
         "excitation_band_hz": np.asarray(band_hz, dtype=np.float64),
         "calibration_block_size": np.int64(block_size),
         "calibration_latency": np.str_(latency),
@@ -527,6 +551,16 @@ def main(argv: list[str] | None = None) -> int:
     signal_spectrum = np.fft.rfft(err[period_starts[0] : period_starts[0] + probe.period_samples])
 
     fit_band = (float(args.fit_band[0]), float(args.fit_band[1]))
+    consistency_band = (
+        float(args.consistency_band[0]), float(args.consistency_band[1])
+    )
+    if consistency_band[0] > need_lo or consistency_band[1] < need_hi:
+        print(
+            f"[중단] 일관성 대역 {consistency_band} 가 필수 대역 "
+            f"({need_lo}, {need_hi}) 를 덮지 못합니다 — 게이트가 거부할 값을 만듭니다.",
+            file=sys.stderr,
+        )
+        return 2
     results: dict[str, dict[str, Any]] = {}
     for drive, output_channel in (("noise", "noise"), ("cancel", "cancel")):
         try:
@@ -534,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
                 err=err, probe=probe, drive=drive, period_starts=period_starts,
                 fir_length=int(args.fir_length), pre_roll=int(args.pre_roll),
                 max_delay_samples=max_delay, fit_band_hz=fit_band,
+                consistency_band_hz=consistency_band,
                 min_alignment_score=float(args.min_alignment_score),
                 min_kept_repeats=int(args.min_kept_repeats),
             )
@@ -577,8 +612,10 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"\n=== {label} ===\n"
             f"  순수지연 {model['delay_samples']} 샘플 "
-            f"({model['delay_fractional']:.2f}) · 반복 일관성 "
-            f"정렬전 {model['raw_consistency']:.4f} → **{model['consistency']:.4f}**\n"
+            f"({model['delay_fractional']:.2f}) · "
+            f"{model['consistency_band_hz'][0]:.0f}-"
+            f"{model['consistency_band_hz'][1]:.0f}Hz 일관성 "
+            f"**{model['consistency']:.4f}** (전대역 {model['fullband_consistency']:.4f})\n"
             f"  절대 τ 흔들림 {model['absolute_tau_spread']:.1f} 샘플 "
             f"(상대 {relative_spread}, 허용 {max_jitter}) · "
             f"정렬 실패 반복 {model['rejected_repeats']}/{model['all_taus'].size}\n"
@@ -615,12 +652,15 @@ def main(argv: list[str] | None = None) -> int:
         "invalid_reasons": invalid,
         "valid": valid,
         "fit_band_hz": list(fit_band),
+        "consistency_band_hz": list(consistency_band),
         "relative_delay_spread_samples": relative_spread,
         "max_delay_jitter_samples": max_jitter,
         "channels": {
             drive: {
                 "output_channel": item["output_channel"],
                 "consistency": item["model"]["consistency"],
+                "fullband_consistency": item["model"]["fullband_consistency"],
+                "consistency_band_hz": list(item["model"]["consistency_band_hz"]),
                 "raw_consistency": item["model"]["raw_consistency"],
                 "delay_samples": item["model"]["delay_samples"],
                 "delay_fractional": item["model"]["delay_fractional"],

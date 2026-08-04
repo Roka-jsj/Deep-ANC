@@ -43,6 +43,7 @@ def _official_path(
             "tone_count": np.asarray(771, dtype=np.int64),
             "tone_snr_median_db": np.asarray(24.0),
             "tone_snr_min_db": np.asarray(14.0),
+            "consistency_band_hz": np.asarray([100.0, 1_000.0]),
         }
         defaults.update(
             {key: np.asarray(value) for key, value in (interleaved or {}).items()}
@@ -463,6 +464,7 @@ def test_interleaved_without_extra_metadata_is_rejected(tmp_path):
         ({"tone_count": 32}, "tone_count"),
         ({"tone_snr_median_db": 6.0}, "tone_snr_median_db"),
         ({"capture_id": ""}, "capture_id"),
+        ({"consistency_band_hz": [300.0, 500.0]}, "일관성 측정 대역"),
     ],
 )
 def test_interleaved_quality_fields_are_enforced(tmp_path, override, pattern):
@@ -537,3 +539,49 @@ def test_mixed_methods_are_rejected(tmp_path):
     matched = _check(report, "matched_path_measurement_conditions")
     assert not matched["ok"]
     assert "측정 방식 불일치" in matched["message"]
+
+
+def test_init_lead_mismatch_is_rejected_by_default(tmp_path):
+    """기본값은 정확히 일치다 — 허용치는 설정에 명시해야만 열린다."""
+
+    cfg = _ready_config(tmp_path)
+    cfg["data"]["digital_reference_lead_samples"] = 4      # checkpoint 는 3
+    cfg["duct"]["secondary_path"]["handoff_extra_samples"] = 3
+    report = audit_finetune_readiness(cfg, full_recorded_qa=False)
+    check = _check(report, "completed_init_checkpoint")
+    assert not check["ok"]
+    assert "lead 불일치" in check["message"]
+
+
+def test_init_lead_mismatch_within_declared_tolerance_passes(tmp_path):
+    cfg = _ready_config(tmp_path)
+    cfg["data"]["digital_reference_lead_samples"] = 4
+    cfg["duct"]["secondary_path"]["handoff_extra_samples"] = 3
+    cfg["readiness"]["max_init_lead_mismatch_samples"] = 2
+    report = audit_finetune_readiness(cfg, full_recorded_qa=False)
+    assert _check(report, "completed_init_checkpoint")["ok"]
+
+
+def test_gross_lead_mismatch_is_rejected_despite_tolerance(tmp_path):
+    """허용치는 유계다 — 실물 규모의 사고(lead 113 vs 0)는 통과하면 안 된다.
+
+    픽스처의 lead 는 3 이라 checkpoint 를 0 으로 두면 차이가 3 뿐이다. 허용치 16 을
+    넘는 차이를 만들어야 "유계성"을 실제로 검사한다.
+    """
+
+    cfg = _ready_config(tmp_path)
+    init = Path(cfg["init_ckpt"])
+    pretrain_cfg = {
+        "model": cfg["model"],
+        "data": {"digital_reference_lead_samples": 50},
+        "digital_reference_lead_samples": 50,
+        "physics_status": "secondary_surrogate_representation_pretrain",
+        "schedule": {"total_steps": 10},
+    }
+    _checkpoint(init, cfg=pretrain_cfg, step=8)
+    _checkpoint(init.parent / "last.pt", cfg=pretrain_cfg, step=10)
+    cfg["readiness"]["max_init_lead_mismatch_samples"] = 16
+    report = audit_finetune_readiness(cfg, full_recorded_qa=False)
+    check = _check(report, "completed_init_checkpoint")
+    assert not check["ok"]
+    assert "lead 불일치" in check["message"]

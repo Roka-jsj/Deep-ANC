@@ -97,97 +97,222 @@ trusted band(150–600Hz) 밖이고 학습 손실이 그 대역을 보지 않는
 
 ---
 
-## 2. 시스템 아키텍처
+## 2. 아키텍처
+
+### 2.1 신호 흐름
 
 <div align="center">
-  <a href="assets/diagrams/hybrid_anc_architecture.svg">
-    <img src="assets/diagrams/hybrid_anc_architecture.svg" width="850" alt="HybridANCNet 구조">
-  </a>
+  <img src="assets/diagrams/fig1_system.svg" width="960" alt="ANC 신호 흐름">
 </div>
 
-```
-        소음원 n(t)                        ┌──────────────────────────┐
-            │                              │  HybridANCNet (인과)      │
-            ├─ digital ref x_ref(t)=n(t+109) ▶  Encoder → TCN → GLSTM │
-            │                              │  → (MHSA) → Decoder      │
-            ▼                              └────────────┬─────────────┘
-      P(z) 1차경로                                       │ y(t) 상쇄 파형
-            │                                            ▼
-            │                                      S(z) 2차경로
-            └──────────▶  e(t) = d(t) + S·y(t)  ◀───────┘
-                              에러 마이크 (손실 대상)
-```
-
-`HybridANCNet`은 Conv-TasNet식 학습형 encoder/decoder, WaveNet식 dilated causal TCN,
-GCRN식 GLSTM을 결합한다. `base`에는 회전기계 같은 반복 패턴을 다시 보는 causal MHSA가 있고,
-`tiny`는 이를 제거해 Jetson CPU 실시간 예산을 맞춘다.
-
-### 2.1 모델 변형
-
-| 변형 | 파라미터 | dilations | Attention | TCN 수용영역 | Jetson P99 (ORT CPU) |
-|---|---:|---|---|---:|---:|
-| `base` | 5,994,512 | 1,2,4,8,16 ×3 | 4head, win 64f | 504.0 ms | 6.8 ms (TRT 목표) |
-| `tiny` | 1,164,809 | 1,2,4,8 ×2 | 없음 | 168.0 ms | **1.84 ms** |
-| `tiny_long` | 1,301,771 | 1,2,4,8,16 ×2 | 없음 | 338.7 ms | **2.24 ms** |
-| `tiny_attn` | 1,231,369 | 1,2,4,8 ×2 | 4head, win 64f | 168.0 ms | 측정 예정 |
-| `tiny_long_attn` | 1,368,331 | 1,2,4,8,16 ×2 | 4head, win 64f | 338.7 ms | 측정 예정 |
-
-tiny 계열 4종은 tiny를 원점으로 **(수용영역 축) × (조회 축)** 2×2 격자를 이룬다.
-구조 비교는 NMSE 하나가 아니라 **NMSE와 Jetson P99를 함께** 본다 — 감쇠가 조금 좋아도
-실시간 게이트를 넘기면 배포할 수 없기 때문이다.
-
-### 2.2 레이어 구성
+<p align="center"><b>Figure 1.</b> 학습과 실기가 같은 방정식을 쓴다. 모델은 마스크가 아니라
+<b>상쇄 파형 <code>y(t)</code> 를 직접 회귀</b>하고, 학습에서는 실측 <code>S(z)</code> 를
+미분 가능한 플랜트로 통과시켜 에러 마이크의 <code>e(t)</code> 를 최소화한다.
+숫자는 실측값(48kHz 샘플)이며 <code>configs/duct.yaml</code> 이 단일 출처다.</p>
 
 ```
-x [B,2,T]  (ch0=x_ref, ch1=err_in)
-  │  ÷ io_scale(0.02)                       입력 정규화 — 마이크 실측 RMS 기준
-  ▼
-Encoder      causal Conv1d(2→2C, k=384, s=128) → GLU → ChannelLN → 1×1
-  │          룩백 8ms, 룩어헤드 0. hop 128 = 2.67ms/프레임
-  ▼
-TCN × R      [ 1×1 → PReLU → ChannelLN
-  │            → depthwise causal Conv1d(k=3, dilation=d) → PReLU → ChannelLN
-  │            → (skip 1×1, residual 1×1) ]           d ∈ dilations, 반복 R회
-  │          repeat 2 뒤 GLSTM, base는 repeat 3 뒤 MHSA 삽입
-  ▼
-GLSTM        채널을 G그룹으로 나눠 그룹별 LSTM → 그룹 간 셔플 → 결합 (GCRN)
-  │          시간 상태를 프레임 간에 들고 간다 = 스트리밍 상태의 실체
-  ▼
-MHSA         windowed causal multi-head attention (base 전용, window 64프레임=170ms)
-  │          회전기계처럼 반복하는 패턴을 되돌아본다. tiny 계열은 없음
-  ▼
-Decoder      1×1 → ConvTranspose1d(C→1, k=384, s=128) overlap-add
-  │
-  ▼  × io_scale · 소프트 리미터 0.2·tanh(y/0.2)
-y [B,1,T]    상쇄 파형
+e(t) = d(t) + S · y(t)          d(t) = P · n(t)
 ```
 
-| 하이퍼파라미터 | `base` | `tiny` | 의미 |
-|---|---:|---:|---|
-| encoder channels | 256 | 128 | GLU 통과 후 채널 (conv out은 2배) |
-| TCN repeats × dilations | 3 × (1,2,4,8,16) | 2 × (1,2,4,8) | 수용영역을 결정 |
-| TCN hidden | 512 | 256 | 1×1 확장 채널 |
-| GLSTM groups × hidden | 2 × 256 | 1 × 192 | 그룹 LSTM 폭 |
-| attention | 4head · 64dim · 64프레임 | 없음 | 반복 패턴 조회 |
-| `io_scale` | 0.02 | 0.02 | **바꾸면 재학습 필요** |
-| limiter | `0.2·tanh(y/0.2)` | 동일 | 런타임 `safety.control_limit`과 정합 |
+측정 FIR에 극성이 이미 들어 있으므로 어디에서도 추가 부호 반전을 하지 않는다.
+
+**지연 예산이 이 설계의 모든 것을 결정한다.** 상쇄 경로는 `S 1465 + handoff 256 = 1721`
+샘플이고 1차 경로는 `P 1608` 샘플이다. 즉 **상쇄음이 소음보다 113샘플 늦게 도착한다.**
+소음을 Jetson이 직접 생성하기 때문에 레퍼런스를 그만큼 미리 줄 수 있고
+(`digital_reference_lead_samples = 113`), 그래서 이 시스템이 성립한다.
+이 여유가 **2.4 ms 뿐**이라는 사실이 아래 §2.3의 모든 설계 결정을 강제한다.
+
+### 2.2 HybridANCNet
+
+<div align="center">
+  <img src="assets/diagrams/fig2_architecture.svg" width="520" alt="HybridANCNet 전체 스택">
+</div>
+
+<p align="center"><b>Figure 2.</b> 전체 스택 (tiny 기준). 오른쪽은 텐서 shape.
+점선 블록(MHSA)은 <code>base</code> 전용이며 배포 모델에는 없다 —
+구조 탐색에서 <b>측정으로 실격</b>했다(§2.8).</p>
+
+| 하이퍼파라미터 | `base` | `tiny` |
+|---|---:|---:|
+| 파라미터 | 5,994,512 | **1,164,809** |
+| encoder channels `C` | 256 | 128 |
+| TCN repeats × dilations | 3 × (1,2,4,8,16) | 2 × (1,2,4,8) |
+| TCN blocks | 15 | 8 |
+| TCN hidden | 512 | 256 |
+| GLSTM `G × H` | 2 × 256 | 1 × 192 |
+| MHSA | 4 heads, w=64 | 없음 |
+| 수용영역 | 504 ms | 168 ms |
+| **Jetson P99 (ORT CPU)** | 6.8 ms ✗ | **1.84 ms** ✓ |
 
 `hop=128`인데 런타임 블록이 256인 것은 실수가 아니다. 엔진은 한 스텝에 **2프레임을 그래프
-내부에서 언롤**한다. 콜백 주기를 늘려 xrun 여유를 얻으면서 알고리즘 룩어헤드는 0으로 유지한다.
+내부에서 언롤**한다 — 콜백 주기를 늘려 xrun 여유를 얻으면서 알고리즘 룩어헤드는 0으로 유지한다.
 
-`io_scale`은 마이크 실측 RMS를 기준으로 정한 상수다. 입출력 정규화가 학습된 가중치와 결합돼
-있으므로 이 값을 바꾸면 checkpoint가 무효가 된다.
+### 2.3 왜 원논문 구조를 그대로 쓰지 않는가
 
-### 2.3 텐서 규약
+이 아키텍처는 세 논문에서 부품을 가져왔지만 **어느 것도 그대로 쓸 수 없었다.** 원논문들은
+전부 오프라인·비인과 또는 자기회귀 설정이고, ANC는 그 반대편 극단에 있기 때문이다.
 
-| 구간 | 규약 |
-|---|---|
-| 입력 | `[B, 2, T]` · `ch0=x_ref`, `ch1=err_in`, `T`는 128의 배수 |
-| encoder | causal Conv1d `k=384`, `stride=128` → GLU → ChannelLN/1×1 |
-| 출력 | `[B, 1, T]` · `0.2·tanh(y/0.2)` 소프트 리미터 |
-| 런타임 | 256샘플 블록, 내부 2프레임, 알고리즘 룩어헤드 0 |
-| 1차경로 | 현재 `P(z)=S(z)` scale-matched surrogate, `D_noise=1489` |
-| 2차경로 | 측정 `S(z)` 2048탭 → 순수지연 `1342+256=1598` 샘플 |
+| 제약 | 값 | 이 제약이 배제하는 것 |
+|---|---|---|
+| 알고리즘 룩어헤드 | **0 프레임** | 양방향 RNN, global LN, STFT 분석창 |
+| 실시간 예산 | Jetson CPU P99 **< 3 ms** / 5.33 ms 블록 | 자기회귀 샘플 생성, 5.99M 파라미터 |
+| 스트리밍 = 오프라인 등가 | 최대 오차 `3e-8` | 그래프에 숨은 전역 상태 |
+| 출력 | 마스크가 아니라 **파형** | 마스킹 기반 분리 formulation |
+
+#### Conv-TasNet — encoder/decoder와 1-D 블록
+
+**가져온 것:** 파형영역 학습형 encoder/decoder, depthwise dilated conv 블록, skip+residual 분기.
+
+**바꾼 것과 이유:**
+
+1. **global LN → ChannelLN.** Conv-TasNet의 gLN은 발화 **전체**의 통계로 정규화한다. 스트리밍에서
+   그 통계는 미래를 포함하므로 인과성이 깨진다. 채널 축만 정규화해야 프레임 단위 추론과
+   오프라인 결과가 수치로 같아진다 — 이 등가성을 테스트가 강제한다.
+2. **마스크 → 파형 회귀.** Conv-TasNet은 혼합 신호의 encoding에 마스크를 곱해 화자를 분리한다.
+   ANC에는 **분리할 혼합 신호가 없다.** 레퍼런스에 마스크를 곱해서는 1차경로 응답의
+   *음의 신호*를 만들 수 없다. 그래서 디코더가 상쇄 파형을 직접 합성한다.
+3. **좌측 패딩 전용.** 원구조는 기본이 비인과다.
+
+> 그대로 썼다면: 실시간에서 소음이 도착하기 **전에** 출력을 낼 수 없어 ANC 자체가 불가능하다.
+
+#### WaveNet — dilated causal convolution
+
+**가져온 것:** dilation을 지수적으로 키워 수용영역을 넓히는 스택, skip 연결.
+
+<div align="center">
+  <img src="assets/diagrams/fig4_receptive_field.svg" width="900" alt="dilated causal convolution 수용영역">
+</div>
+
+<p align="center"><b>Figure 3.</b> tiny의 한 repeat (d = 1, 2, 4, 8). 층을 쌓을 때마다 수용영역이
+지수적으로 커지지만 현재 프레임 <code>t</code> 오른쪽 탭은 하나도 없다.
+전체 2 repeat = 61 프레임 = <b>168 ms</b>.</p>
+
+**바꾼 것과 이유:**
+
+1. **자기회귀 제거.** WaveNet은 샘플 하나를 낼 때마다 스택 전체를 다시 통과한다. 48 kHz에서
+   5.33 ms 블록당 **256회 forward**가 필요하다. Jetson CPU 예산은 블록당 **1회 3 ms**다.
+   여기서는 레퍼런스로부터 프레임 전체를 한 번에 예측한다(비자기회귀).
+2. **μ-law softmax → 연속 출력.** 상쇄 파형은 8-bit 양자화 격자 위에 있지 않다.
+3. **샘플이 아니라 encoder 프레임 위에서 dilation.** hop 128 덕분에 같은 dilation 예산
+   (1,2,4,8)이 몇 ms가 아니라 **168 ms**를 덮는다. 덕트의 최저 축방향 공진 70 Hz의
+   주기가 14 ms이므로 이 길이가 필요하다.
+
+> 그대로 썼다면: 실시간 추론이 100배 이상 예산을 초과한다.
+
+#### GCRN — Grouped LSTM
+
+**가져온 것:** 채널을 G그룹으로 나눠 순환 비용을 1/G로 줄이고, 그룹 간 셔플로 정보를 다시 섞는 전략.
+
+<div align="center">
+  <img src="assets/diagrams/fig5_glstm.svg" width="820" alt="Grouped LSTM">
+</div>
+
+<p align="center"><b>Figure 4.</b> Grouped LSTM (G = 2 예시). <code>h, c</code> 가 프레임 간에
+넘어가는 순환 상태이며, 이것이 곧 스트리밍 상태의 실체다(Figure 6).</p>
+
+**바꾼 것과 이유:**
+
+- **STFT 도메인 → 파형 도메인.** GCRN은 복소 스펙트럼 매핑 모델이라 LSTM이 STFT 병목에 있다.
+  STFT는 **분석창을 다 채워야** 변환할 수 있으므로 창 길이만큼 룩어헤드가 생긴다.
+  1024샘플 창이면 **21 ms**인데, 이 시스템의 전체 여유는 **2.4 ms**다.
+  **STFT 기반 구조는 지연 예산만으로 배제된다.** 그래서 그룹 LSTM만 떼어내 TCN 스택
+  중간(repeat 2 뒤)에 넣었다.
+
+#### Transformer — Multi-Head Self-Attention
+
+**가져온 것:** 회전기계처럼 반복되는 패턴을 되돌아보는 조회 메커니즘.
+
+**바꾼 것:** 양방향 full attention → **windowed causal** (과거 64프레임 = 170 ms).
+양방향은 비인과라 즉시 탈락이고, `O(T²)` full attention은 스트리밍에서 무한히 커진다.
+
+**그리고 측정 결과 도움이 되지 않았다.** 20k step 동일 조건 구조 탐색에서 attention 계열은
+대조군 대비 **fullband +2.15 dB / held-out +2.12 dB 악화**로 do-no-harm 실격이었다.
+배포 모델 `tiny`에서 MHSA를 **제거**한 근거가 이 측정이다. 논문에 있는 부품이라고 넣지 않았다.
+
+#### 정리
+
+| 논문 | 가져온 것 | 그대로 쓰면 | 이 프로젝트 |
+|---|---|---|---|
+| Conv-TasNet | 파형 encoder/decoder, 1-D 블록 | 비인과(gLN), 마스크 formulation | cLN, 파형 직접 회귀, 좌측 패딩 |
+| WaveNet | dilated causal 스택 | 자기회귀 → 예산 100배 초과 | 비자기회귀, 연속출력, 프레임 단위 dilation |
+| GCRN | grouped LSTM + shuffle | STFT 창 21 ms 룩어헤드 | 파형영역 TCN 스택 안에 배치 |
+| Transformer | 반복 패턴 조회 | 양방향·`O(T²)` | windowed causal — **측정 후 제거** |
+
+### 2.4 TCN 잔차 블록
+
+<div align="center">
+  <img src="assets/diagrams/fig3_tcn_block.svg" width="760" alt="TCN 잔차 블록">
+</div>
+
+<p align="center"><b>Figure 5.</b> 1×1로 채널을 넓히고 depthwise dilated conv로 시간을 본 뒤
+skip과 residual로 나눠 내보낸다. depthwise를 쓰면 채널마다 독립 시간 필터를 두면서도
+파라미터가 <code>H·k</code> 로 끝나고, 채널 혼합은 앞뒤 1×1이 맡는다.</p>
+
+### 2.5 스트리밍 상태
+
+<div align="center">
+  <img src="assets/diagrams/fig6_streaming.svg" width="880" alt="스트리밍 상태 I/O">
+</div>
+
+<p align="center"><b>Figure 6.</b> 모든 상태를 그래프 입출력으로 드러낸다.
+숨은 전역 상태를 두면 오프라인 결과와 프레임 단위 결과가 같은지 <b>검증할 방법이 없다.</b>
+tiny의 상태는 12개다.</p>
+
+- 오프라인 일괄 추론 ↔ 프레임 단위 스트리밍: 최대 오차 **3e-8**
+- PyTorch ↔ ONNX Runtime: 최대 오차 **8e-8**
+- ONNX opset 17, 정적 shape, 상태 명시 I/O
+
+### 2.6 성능
+
+**모든 수치는 `secondary_surrogate` 플랜트에서 나온 표현 사전학습 지표이거나 실기 관측치다.**
+실측 `P/S` 파인튜닝 전이므로 최종 성능이 아니다. 이 구분은 checkpoint의 `physics_status`
+필드가 강제한다.
+
+**base vs tiny** — 동일 조건(100k step, 같은 seed·데이터, held-out 64 아이템):
+
+| 지표 (NMSE dB, 낮을수록 좋음) | base 5.99M | tiny 1.16M | 우세 |
+|---|---:|---:|---|
+| trusted 150–600 Hz | **−18.99** | −18.66 | base 0.33 |
+| fullband | −15.88 | **−17.14** | **tiny 1.26** |
+| held-out η=0.15 trusted | **−14.78** | −14.74 | base 0.04 |
+| held-out η=0.15 fullband | −12.97 | **−13.97** | **tiny 1.00** |
+| **최악 아이템 fullband** | **+13.89 (증폭)** | **+4.06** | **tiny 9.83** |
+| Jetson P99 | 6.8 ms ✗ | **1.84 ms** ✓ | **tiny** |
+
+소스별로는 **7종 중 7종 전부 tiny가 우세**하며, 최악 소스 `demand`가 base −4.36 / tiny −9.24 dB다.
+**파라미터가 5배 많다고 안전하지 않다** — 최악 아이템에서 base는 fullband를 13.89 dB 증폭한다
+(do-no-harm 위반). 배포 후보를 tiny로 확정한 근거다.
+
+**구조 탐색** — 20k step 동일 예산, `last.pt` 기준, paired bootstrap 95% CI:
+
+| 후보 | trusted NMSE | Δ vs 대조군 | 95% CI | 판정 |
+|---|---:|---:|---|---|
+| `tiny_control` | −14.59 | — | — | **승자** |
+| `tiny_long` | −14.81 | −0.22 | [−0.71, **+0.26**] | 유의하지 않음 |
+| `tiny_long_attn` | −12.42 | +2.17 | [+1.47, +2.94] | 실격 (do-no-harm) |
+| `tiny_attn` | −12.06 | +2.53 | [+1.59, +3.53] | 실격 (do-no-harm) |
+
+seed를 바꾸면 `tiny_long`의 Δ가 −0.22 ↔ +0.46으로 **0.68 dB 요동**한다. 판정 마진 0.30 dB보다
+크므로 이득이 있더라도 run 간 잡음에 묻힌다. **구조 탐색은 종결이고 tiny를 유지한다.**
+
+**실기 ANC** (tiny + ONNX Runtime, 실제 덕트/마이크/스피커):
+
+<div align="center">
+  <img src="assets/images/anc_demo.png" width="900" alt="실기 ANC OFF/ON">
+</div>
+
+<p align="center"><b>Figure 7.</b> 음성 + 80–800 Hz 덕트 소음을 재생하고 10초 뒤 ANC를 켠 실측.
+에러 마이크 레벨 <code>−14.5 → −18.7 dBFS</code>, 150–600 Hz 공진 봉우리가 눌린다.</p>
+
+| 시나리오 | 감쇠 |
+|---|---:|
+| tone 300 Hz | **+6.26 dB** |
+| band (trusted) | **+5.14 dB** |
+| 음성 + 소음 (80–800 Hz) | **+4.39 dB** |
+| 1150–1250 Hz | +0.46 dB — 상쇄도 증폭도 하지 않음 |
+
+고역이 0 dB인 것은 손실이 trusted band(150–600 Hz)만 최적화하기 때문이다. 현 단계에서
+**증폭하지 않는 것**이 성공 기준이며, 절대 목표 1의 고역은 **아직 미달**이다(§7.4).
 
 ---
 

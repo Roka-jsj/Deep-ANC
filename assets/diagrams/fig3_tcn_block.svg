@@ -1,60 +1,42 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="700" viewBox="0 0 1080 700">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="604" viewBox="0 0 900 604">
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa5b1"/></marker></defs>
-  <rect width="1080" height="700" fill="#ffffff"/>
-  <text x="40.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="16" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">Figure 3.  TCN 잔차 블록 — depthwise dilated causal convolution</text>
-  <text x="40.0" y="60.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">Conv-TasNet 의 1-D 블록 구조. 1×1 로 채널을 넓혔다가 depthwise dilated conv 로 시간을 보고, skip 과 residual 로 나눠 내보낸다.</text>
-  <rect x="380.0" y="110.0" width="300.0" height="44.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.5"/>
-  <text x="530.0" y="128.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">1×1 conv</text>
-  <text x="530.0" y="143.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">C → H  (H = 256)</text>
-  <line x1="530.0" y1="154.0" x2="530.0" y2="170.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <rect x="380.0" y="170.0" width="300.0" height="44.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7b8794" stroke-width="1.5"/>
-  <text x="530.0" y="188.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">PReLU</text>
-  <text x="530.0" y="203.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">채널별 학습형 기울기</text>
-  <line x1="530.0" y1="214.0" x2="530.0" y2="230.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <rect x="380.0" y="230.0" width="300.0" height="44.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7b8794" stroke-width="1.5"/>
-  <text x="530.0" y="248.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">ChannelLN</text>
-  <text x="530.0" y="263.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">시간축 통계를 쓰지 않는 정규화 — 인과성 유지</text>
-  <line x1="530.0" y1="274.0" x2="530.0" y2="290.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <rect x="380.0" y="290.0" width="300.0" height="44.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.5"/>
-  <text x="530.0" y="308.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">D-Conv</text>
-  <text x="530.0" y="323.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">depthwise causal, k = 3, dilation = d</text>
-  <line x1="530.0" y1="334.0" x2="530.0" y2="350.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <rect x="380.0" y="350.0" width="300.0" height="34.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7b8794" stroke-width="1.5"/>
-  <text x="530.0" y="367.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">PReLU</text>
-  <line x1="530.0" y1="384.0" x2="530.0" y2="400.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <rect x="380.0" y="400.0" width="300.0" height="34.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7b8794" stroke-width="1.5"/>
-  <text x="530.0" y="417.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">ChannelLN</text>
-  <line x1="530.0" y1="434.0" x2="530.0" y2="450.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <circle cx="530.0" cy="450.0" r="6.0" fill="#16202c" stroke="#16202c" stroke-width="1.6"/>
-  <text x="544.0" y="450.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">분기</text>
-  <path d="M 530.0 450 L 300 450 L 300 490" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-  <rect x="210.0" y="490.0" width="180.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
-  <text x="300.0" y="510.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">skip 1×1</text>
-  <line x1="300.0" y1="530.0" x2="300.0" y2="568.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <text x="300.0" y="582.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">→ skip 합산 (모든 블록)</text>
-  <path d="M 530.0 450 L 770 450 L 770 490" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-  <rect x="680.0" y="490.0" width="180.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
-  <text x="770.0" y="510.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">residual 1×1</text>
-  <line x1="770.0" y1="530.0" x2="770.0" y2="553.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <circle cx="770.0" cy="568.0" r="15.0" fill="#ffffff" stroke="#16202c" stroke-width="1.6"/>
-  <line x1="762.5" y1="568.0" x2="777.5" y2="568.0" stroke="#16202c" stroke-width="1.8" stroke-opacity="1.0" stroke-linecap="round"/>
-  <line x1="770.0" y1="560.5" x2="770.0" y2="575.5" stroke="#16202c" stroke-width="1.8" stroke-opacity="1.0" stroke-linecap="round"/>
-  <path d="M 530.0 104 L 770 104 L 770 553" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-  <text x="780.0" y="104.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">identity</text>
-  <line x1="770.0" y1="583.0" x2="770.0" y2="613.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <text x="770.0" y="626.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">다음 블록</text>
-  <text x="40.0" y="110.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">왜 depthwise 인가</text>
-  <text x="40.0" y="132.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">채널마다 독립 시간 필터를 두면</text>
-  <text x="40.0" y="148.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">파라미터가 H·k 로 끝난다.</text>
-  <text x="40.0" y="164.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">채널 혼합은 앞뒤 1×1 이 맡는다.</text>
-  <text x="40.0" y="210.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">왜 ChannelLN 인가</text>
-  <text x="40.0" y="232.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">BatchNorm 은 배치 통계를,</text>
-  <text x="40.0" y="248.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">global LN 은 발화 전체 통계를 쓴다.</text>
-  <text x="40.0" y="264.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">둘 다 스트리밍에서 미래를 본다.</text>
-  <text x="40.0" y="280.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">채널 축만 정규화해야 프레임 단위</text>
-  <text x="40.0" y="296.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">추론과 오프라인이 수치로 같아진다.</text>
-  <text x="40.0" y="330.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">블록 수</text>
-  <text x="40.0" y="352.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">tiny  : R=2 × 4 = 8 blocks</text>
-  <text x="40.0" y="368.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">dilation d ∈ (1, 2, 4, 8)</text>
-  <text x="40.0" y="384.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">블록마다 d 가 커지며 과거를 넓게 본다.</text>
+  <rect width="900" height="604" fill="#ffffff"/>
+  <text x="480.0" y="24.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="15" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">x</text>
+  <circle cx="480.0" cy="46.0" r="5.0" fill="#16202c" stroke="#16202c" stroke-width="1.6"/>
+  <line x1="480.0" y1="46.0" x2="480.0" y2="64.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="340.0" y="64.0" width="280.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="480.0" y="84.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">1×1 conv,  256</text>
+  <line x1="480.0" y1="104.0" x2="480.0" y2="122.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="340.0" y="122.0" width="280.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="480.0" y="142.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">PReLU</text>
+  <line x1="480.0" y1="162.0" x2="480.0" y2="180.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="340.0" y="180.0" width="280.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="480.0" y="200.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">ChannelLN</text>
+  <line x1="480.0" y1="220.0" x2="480.0" y2="238.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="340.0" y="238.0" width="280.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="480.0" y="258.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">D-Conv 3,  dilation d</text>
+  <line x1="480.0" y1="278.0" x2="480.0" y2="296.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="340.0" y="296.0" width="280.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="480.0" y="316.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">PReLU</text>
+  <line x1="480.0" y1="336.0" x2="480.0" y2="354.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="340.0" y="354.0" width="280.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="480.0" y="374.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">ChannelLN</text>
+  <line x1="480.0" y1="394.0" x2="480.0" y2="412.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <circle cx="480.0" cy="412.0" r="5.0" fill="#16202c" stroke="#16202c" stroke-width="1.6"/>
+  <path d="M 480.0 412 L 240 412 L 240 446" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <rect x="140.0" y="446.0" width="200.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="240.0" y="466.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">1×1 conv</text>
+  <line x1="240.0" y1="486.0" x2="240.0" y2="514.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="240.0" y="530.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="13.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">skip</text>
+  <path d="M 480.0 412 L 720 412 L 720 446" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <rect x="620.0" y="446.0" width="200.0" height="40.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2b5d8a" stroke-width="1.6"/>
+  <text x="720.0" y="466.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#2b5d8a" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">1×1 conv</text>
+  <line x1="720.0" y1="486.0" x2="720.0" y2="516.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <circle cx="720.0" cy="532.0" r="15.0" fill="#ffffff" stroke="#16202c" stroke-width="1.6"/>
+  <line x1="712.5" y1="532.0" x2="727.5" y2="532.0" stroke="#16202c" stroke-width="1.8" stroke-opacity="1.0" stroke-linecap="round"/>
+  <line x1="720.0" y1="524.5" x2="720.0" y2="539.5" stroke="#16202c" stroke-width="1.8" stroke-opacity="1.0" stroke-linecap="round"/>
+  <path d="M 480.0 46 L 720 46 L 720 516" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="732.0" y="30.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">identity</text>
+  <line x1="720.0" y1="548.0" x2="720.0" y2="572.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="720.0" y="588.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="13.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">out</text>
 </svg>

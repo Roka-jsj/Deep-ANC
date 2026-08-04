@@ -20,7 +20,7 @@ digital_primary_path_mode: secondary_surrogate
 # 새 surrogate 사전학습은 이 실제 선행 공급을 포함한다. 배포 runtime 값도 반드시
 # 109로 맞춰야 하며, checkpoint/ONNX 메타와 다르면 런타임이 시작 전 거부한다.
 # acoustic 모드에서는 반드시 0으로 override해야 한다.
-digital_reference_lead_samples: 109
+digital_reference_lead_samples: 113
 
 # 소음원 구성 비율 — 키 이름 = data/manifests/<키>.jsonl 태그 (manifest 없으면 합성원 폴백)
 # quiet zone 목표: 소음뿐 아니라 대화(음성)·음악까지 소스 분포에 포함 (digital-ref 는
