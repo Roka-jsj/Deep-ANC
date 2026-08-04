@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="330" viewBox="0 0 1040 330">
+  <rect width="1040" height="330" fill="white"/>
+  <rect x="70.0" y="120.0" width="793.3" height="98.0" fill="#eef2f5" stroke="#1f2933" stroke-width="2.5"/>
+  <rect x="60.0" y="114.0" width="10" height="110.0" fill="#1f2933"/>
+  <text x="54.0" y="169.0" text-anchor="end" dominant-baseline="middle" font-size="12" fill="#1f2933" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">closed</text>
+  <text x="879.3" y="169.0" dominant-baseline="middle" font-size="12" fill="#1f2933" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">open</text>
+  <line x1="70.0" y1="120.0" x2="70.0" y2="112.0" stroke="#b4532a" stroke-width="2"/>
+  <circle cx="70.0" cy="112.0" r="5" fill="#b4532a"/>
+  <text x="70.0" y="102.0" text-anchor="middle" dominant-baseline="baseline" font-size="13" fill="#b4532a" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">NS  소음 스피커</text>
+  <text x="70.0" y="86.0" text-anchor="middle" dominant-baseline="baseline" font-size="11" fill="#8b949e" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">x = 0.000 m</text>
+  <line x1="770.0" y1="120.0" x2="770.0" y2="112.0" stroke="#2f6f4f" stroke-width="2"/>
+  <circle cx="770.0" cy="112.0" r="5" fill="#2f6f4f"/>
+  <text x="770.0" y="102.0" text-anchor="middle" dominant-baseline="baseline" font-size="13" fill="#2f6f4f" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">CS  상쇄 스피커</text>
+  <text x="770.0" y="86.0" text-anchor="middle" dominant-baseline="baseline" font-size="11" fill="#8b949e" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">x = 1.050 m</text>
+  <line x1="136.7" y1="218.0" x2="136.7" y2="226.0" stroke="#1f2933" stroke-width="2"/>
+  <circle cx="136.7" cy="226.0" r="5" fill="#1f2933"/>
+  <text x="136.7" y="248.0" text-anchor="middle" dominant-baseline="hanging" font-size="13" fill="#1f2933" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">REF  기준 마이크</text>
+  <text x="136.7" y="264.0" text-anchor="middle" dominant-baseline="hanging" font-size="11" fill="#8b949e" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">x = 0.100 m</text>
+  <line x1="803.3" y1="218.0" x2="803.3" y2="226.0" stroke="#1f2933" stroke-width="2"/>
+  <circle cx="803.3" cy="226.0" r="5" fill="#1f2933"/>
+  <text x="803.3" y="248.0" text-anchor="middle" dominant-baseline="hanging" font-size="13" fill="#1f2933" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">ERR  에러 마이크</text>
+  <text x="803.3" y="264.0" text-anchor="middle" dominant-baseline="hanging" font-size="11" fill="#8b949e" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">x = 1.100 m</text>
+  <text x="70" y="300" font-size="12" fill="#1f2933" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">단면 105×105 mm · 내부 길이 1.190 m · closed-open · 평면파 차단 1633 Hz · 목표 대역 80–800 Hz · 축방향 공진 70, 210, 350, 489, 629 Hz</text>
+  <text x="70" y="46" font-size="16" font-weight="bold" fill="#1f2933" font-family="Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif">아크릴 덕트 배치 (원점 = 좌측 폐단)</text>
+</svg>

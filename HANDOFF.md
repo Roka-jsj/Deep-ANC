@@ -2,7 +2,7 @@
 
 > **"이어서 진행해줘"를 받았다면**: §0 라이브 상태 → §2 현재 상태 → §3 다음 단계 순으로 실행하라.
 > 규칙은 [AGENTS.md](AGENTS.md)가 단일 출처. 이 파일은 작업 상태가 바뀔 때마다 갱신할 것.
-> 최종 갱신: 2026-08-04 05:55 KST
+> 최종 갱신: 2026-08-04 14:40 KST
 
 ## 0. 라이브 상태 (가장 먼저 확인할 것 — 시각은 참고용, 실상태는 아래 명령으로)
 
@@ -225,26 +225,69 @@ $SSH 'cd ~/Deep-ANC && bash scripts/elice/run_job_queue.sh 1'   # 또는 0
 - **base 100k 완주** (04:48 KST): 최종 val trusted **−19.73** / full −17.37dB,
   best trusted **−19.75dB**. held-out 64아이템 재평가 완료
 - **base vs tiny 동일조건 비교 완료** — §0 표. **배포 후보는 tiny 로 확정**
-- **전체 회귀 테스트 273개 통과** (세션 시작 기준선 223 → +50)
+
+#### 2026-08-04 오후 세션에서 완료한 것
+
+- **G2 통과 — recorded 데이터셋 수집 완료**: **80세션 / 93.3분 / 4계열 각 20개 / 64그룹**,
+  분할 train 64 · val 9 · test 7, 전수 QA **80/80 PASS**.
+  - `build_recording_sources.py` — 계열별 소스 WAV, tanh 소프트 클리핑으로 크레스트 10dB 제한
+  - `record_session_batch.py` — 재개 가능 배치, 세션마다 즉시 QA, 일시적 xrun 1회 재시도
+  - `record_duct.py` — settle 1초, **xrun 발생 세션은 저장 자체를 거부**
+- **실기 ANC 시연**: 음성+80–800Hz 소음, OFF 10초 → ON 20초 → OFF 5초.
+  소스대역 **+4.39dB**(보수적 기준), trusted NMSE −5.66dB. `results/session_20260804_125538/`
+- **I²S 기동 트랜지언트 오염 수정** (3개 경로): 첫 0.5초가 −36.3dBFS/peak 0.062라
+  실제 바닥(−67.4dBFS/peak 0.002)을 18dB 가리고 있었다. **죽은 마이크도 게이트를 통과하던
+  결함**이라 회귀 테스트로 막았다. 재생 진폭도 0.15 → 0.06으로 낮췄다.
+- **G4의 기능 2 인코딩 수정**: 소스별 **평균**이 아니라 **최악값**으로 판정한다.
+  기존 게이트는 "음성을 6dB 증폭하지만 나머지를 잘 잡는" 모델을 통과시켰다.
+- **파인튜닝 진입점 base → tiny 전환** (`train_finetune.yaml`, 테스트, 문서).
+  게이트가 열리는 순간 **배포하지 않을 모델**을 학습하게 되어 있었다.
+- **동시 인터리브 P/S 측정 도구 신규** — `scripts/data/measure_paths_interleaved.py`,
+  `src/deep_anc/dsp/interleaved_probe.py`(자극 설계 + IR 복원 + warp 추적/역보정).
+  게이트에 `interleaved_multitone` 방식을 추가하되 **ESS 보다 좁게** 검사한다
+  (guard=1, 분석창 ≤2초, 톤 수, 톤 SNR, 그리고 두 파일의 `capture_id` 일치).
+- **전체 회귀 테스트 336개 통과** (세션 시작 기준선 273 → +63)
+- **README 전면 정리 + 그림 4종** — 덕트 도면(SVG, `duct.yaml`에서 생성), 지연 예산,
+  실기 ANC 시연 파형/스펙트럼, 데이터셋 구성. 전부
+  `scripts/docs/render_readme_figures.py`가 **실측 산출물에서 재생성**한다.
 
 ### 대기 ⬜ (다음 세션이 할 일 순서)
 
-1. **감독자 인계 확인** (01:16~01:25 KST 전후): `queue_status.py`로 GPU1이
-   `search_tiny_control`을 시작했는지 확인. `idle_seconds_total`이 60초 미만이어야 정상.
-2. **seed 반복 결과 확인** (06:20 KST 전후): `decide_seed_repeat`가 seed 20260902에서도
-   `tiny_long`이 대조군을 못 이기는지 재현한다. 재현되면 **"tiny로 충분하다"가 확정**되고
-   구조 탐색은 종결이다. 뒤집히면 run 간 분산이 크다는 뜻이므로 결론을 유보한다.
-3. **회수 후 인스턴스 삭제** — base·tiny·구조 후보 전부 완료됐다. GPU1의 seed 반복만
-   끝나면 (~05:45 KST) 남은 GPU 작업이 없다. `runs/queue/handoff.json`에 회수 대상 60건의
-   SHA-256/크기/경로가 있다. 회수 후 **사용자에게 인스턴스 삭제 안내** (시간 과금!).
-4. **최우선 하드웨어 게이트**: I²S 입력이 22:39부터 다시 간헐 과클리핑 FAIL이다.
-   전원 OFF 물리 접촉 확인 후 §3-C의 무출력 probe 2개가 clip 0으로 반복 PASS하기 전에는
-   **어떤 스피커 출력도 실행하지 않는다.**
-5. **P/S 실측은 실행했으나 INVALID**: magnitude 형상은 반복되지만 dominant delay가
-   P `37.79–64.88ms` / S `37.19–80.31ms`로 이동한다. 동기 경로·타임스탬프 방안을 먼저
-   확정한 뒤 같은 gain의 80–1600Hz를 재측정한다. 성공 세션만 골라 게이트를 우회하지 않는다.
-6. THD/IMD와 recorded 독립 세션 최소 80개 수집 → measured P(z) open-loop 파인튜닝 →
-   recorded G4 → FxLMS와 동일 OFF→ON→OFF 세션 비교.
+**파인튜닝 준비 상태: NOT READY. 블로커는 G1 하나뿐이다.**
+
+```
+[FAIL] finetune_readiness  (5 PASS / 4 FAIL — FAIL 4개가 전부 같은 뿌리)
+  [PASS] config_fail_closed_flags / measured_primary_mode / recorded_mix_ratio
+  [PASS] completed_init_checkpoint / recorded_dataset_qa
+  [FAIL] official_secondary_path / official_primary_path
+  [FAIL] matched_path_measurement_conditions / path_delay_and_lead   ← 위 둘에 종속
+```
+
+1. **G1 — 실측 P/S. 이것만 되면 READY다.** 2026-08-04 측정으로 원인이 확정됐다:
+   재생(USB DAC)과 녹음(I²S)이 다른 클록 도메인이라 **1초 창 안에서 대응이 100–200샘플
+   움직인다.** 신호 자체는 문제가 없다 — 톤 SNR 29.5dB, 대역 내 에너지 97.4%,
+   반복 간 `\|H\|` 비 **1.000**. 깨진 것은 시간축 하나다(위상 직선적합 잔차 1.8–3.9 rad).
+
+   | 접근 | 반복 일관성 (요구 0.9) |
+   |---|---:|
+   | 순차 ESS | 0.08–0.17 |
+   | 동시 인터리브, 보정 없음 | 0.05 |
+   | 동시 인터리브 + warp 역보정 (창 43ms) | **0.84 / 0.85** |
+   | + 궤적 평활 | 0.54 (악화 — 요동이 실재한다는 증거) |
+
+   다음에 시도할 것 (기대순): ① 추적 창을 43ms 아래로 내리면서 상관 첨두가 흐려지는
+   지점을 찾기 ② `latency=low`로 재측정(현재 `high`는 버퍼가 커서 warp가 더 실릴 수 있다)
+   ③ 재생·녹음을 **한 장치**로 모으는 방안 검토(하드웨어 변경이므로 최후의 수단).
+   원자료는 `results/calibration_interleaved/20260804_132812_d1479bae/`에 있다.
+   **게이트를 낮추지 않는다.** 성공한 반복만 골라 저장하는 우회도 하지 않는다.
+2. G1 통과 후: `duct.yaml`의 `primary_path_npz` / `d_noise_delay_samples` 기입 → `lead` 재계산
+   → `check_finetune.py` READY 확인 → Stage-2 open-loop 파인튜닝(tiny) → recorded G4.
+3. 남은 감사 항목 (게이트와 무관, 언제든 가능):
+   - `finetune_readiness.py`의 완료 판정이 `schedule.total_steps`를 권위로 쓰도록 —
+     지금은 20k 파일럿이 "완료"로 잡힐 수 있다
+   - `trainer.py`의 `freeze_encoder`를 DDP 래핑 **앞**으로 이동
+   - `recorded_qa.py`의 최소 RMS(−80dBFS)가 실제 바닥(−67.4dBFS)보다 낮다 → SNR 여유로 전환
+   - `make_recorded_manifest.py`가 `batch_progress.csv`의 판정을 무시한다
 
 ### 승자 연장 작업의 규약 (감독자가 자동 적용 — 참고용)
 
