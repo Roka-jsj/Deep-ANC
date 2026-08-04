@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="430" viewBox="0 0 1080 430">
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa5b1"/></marker></defs>
+  <rect width="1080" height="430" fill="#ffffff"/>
+  <text x="40.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="16" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">Figure 5.  Grouped LSTM — 순환 비용을 G 배 줄이고 셔플로 다시 섞는다</text>
+  <text x="40.0" y="60.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">GCRN 의 그룹 전략. 채널을 G 그룹으로 나눠 그룹마다 작은 LSTM 을 돌리면 파라미터가 1/G 로 준다. 그대로 두면 그룹이 서로 못 보므로 셔플로 섞는다. (그림은 G = 2 예시)</text>
+  <rect x="70.0" y="130.0" width="120.0" height="120.0" rx="8.0" fill="#f4f6f8" fill-opacity="1.0" stroke="#16202c" stroke-width="1.6"/>
+  <text x="130.0" y="190.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">C 채널</text>
+  <line x1="190.0" y1="190.0" x2="260.0" y2="152.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="260.0" y="130.0" width="150.0" height="44.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7a4b8f" stroke-width="1.6"/>
+  <text x="335.0" y="152.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="normal" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">group 1   C/G</text>
+  <line x1="410.0" y1="152.0" x2="470.0" y2="152.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="470.0" y="130.0" width="150.0" height="44.0" rx="8.0" fill="#f7f2fa" fill-opacity="1.0" stroke="#7a4b8f" stroke-width="1.6"/>
+  <text x="545.0" y="152.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="normal" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">LSTM  H = 256</text>
+  <line x1="620.0" y1="152.0" x2="700.0" y2="152.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <line x1="190.0" y1="190.0" x2="260.0" y2="222.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="260.0" y="200.0" width="150.0" height="44.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7a4b8f" stroke-width="1.6"/>
+  <text x="335.0" y="222.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="normal" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">group 2   C/G</text>
+  <line x1="410.0" y1="222.0" x2="470.0" y2="222.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="470.0" y="200.0" width="150.0" height="44.0" rx="8.0" fill="#f7f2fa" fill-opacity="1.0" stroke="#7a4b8f" stroke-width="1.6"/>
+  <text x="545.0" y="222.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="normal" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">LSTM  H = 256</text>
+  <line x1="620.0" y1="222.0" x2="700.0" y2="222.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="700.0" y="130.0" width="150.0" height="120.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#7a4b8f" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <text x="775.0" y="180.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">channel</text>
+  <text x="775.0" y="198.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">shuffle</text>
+  <line x1="850.0" y1="190.0" x2="920.0" y2="190.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="920.0" y="130.0" width="120.0" height="120.0" rx="8.0" fill="#f4f6f8" fill-opacity="1.0" stroke="#16202c" stroke-width="1.6"/>
+  <text x="980.0" y="190.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">C 채널</text>
+  <rect x="450.0" y="290.0" width="190.0" height="46.0" rx="8.0" fill="#fdf9f2" fill-opacity="1.0" stroke="#7a4b8f" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="545.0" y="313.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#7a4b8f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">h, c  →  다음 프레임</text>
+  <path d="M 545 174 L 545 290" fill="none" stroke="#7a4b8f" stroke-width="1.2" stroke-opacity="0.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 3"/>
+  <path d="M 545 244 L 545 290" fill="none" stroke="#7a4b8f" stroke-width="1.2" stroke-opacity="0.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 3"/>
+  <text x="40.0" y="380.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">이 h, c 가 스트리밍 상태의 실체다 — ONNX 에서 그래프 밖으로 드러나야 오프라인/스트리밍 등가를 검증할 수 있다 (Figure 6).</text>
+</svg>

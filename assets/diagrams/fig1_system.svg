@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="470" viewBox="0 0 1080 470">
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa5b1"/></marker></defs>
+  <rect width="1080" height="470" fill="#ffffff"/>
+  <text x="40.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="16" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">Figure 1.  ANC 신호 흐름 — 학습과 실기가 같은 방정식을 쓴다</text>
+  <text x="40.0" y="60.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">모델은 상쇄 파형 y(t) 를 직접 회귀한다. 학습에서는 실측 S(z) 를 미분 가능한 플랜트로 통과시켜 e(t) 를 최소화한다.</text>
+  <rect x="40.0" y="94.0" width="150.0" height="52.0" rx="8.0" fill="#f4f6f8" fill-opacity="1.0" stroke="#16202c" stroke-width="1.6"/>
+  <rect x="40.0" y="94.0" width="150.0" height="4.0" rx="2.0" fill="#16202c" fill-opacity="1.0" stroke="#16202c" stroke-width="0"/>
+  <text x="115.0" y="115.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">소음원 n(t)</text>
+  <text x="115.0" y="132.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">Jetson 이 생성</text>
+  <rect x="300.0" y="90.0" width="170.0" height="60.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#8a6d1f" stroke-width="1.6"/>
+  <rect x="300.0" y="90.0" width="170.0" height="4.0" rx="2.0" fill="#8a6d1f" fill-opacity="1.0" stroke="#8a6d1f" stroke-width="0"/>
+  <text x="385.0" y="115.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600" fill="#8a6d1f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">P(z)  1차경로</text>
+  <text x="385.0" y="132.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">D_noise = 1489 samp</text>
+  <line x1="190.0" y1="120.0" x2="300.0" y2="120.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="245.0" y="108.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">스피커 ch0</text>
+  <line x1="115.0" y1="146.0" x2="115.0" y2="300.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round"/>
+  <line x1="115.0" y1="300.0" x2="230.0" y2="300.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="230.0" y="270.0" width="210.0" height="60.0" rx="8.0" fill="#f4f6f8" fill-opacity="1.0" stroke="#16202c" stroke-width="1.6"/>
+  <rect x="230.0" y="270.0" width="210.0" height="4.0" rx="2.0" fill="#16202c" fill-opacity="1.0" stroke="#16202c" stroke-width="0"/>
+  <text x="335.0" y="295.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600" fill="#16202c" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">digital reference</text>
+  <text x="335.0" y="312.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">x_ref(t) = n(t + 109)</text>
+  <rect x="490.0" y="254.0" width="210.0" height="92.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#2f6f4f" stroke-width="1.6"/>
+  <rect x="490.0" y="254.0" width="210.0" height="4.0" rx="2.0" fill="#2f6f4f" fill-opacity="1.0" stroke="#2f6f4f" stroke-width="0"/>
+  <text x="595.0" y="281.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600" fill="#2f6f4f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">HybridANCNet</text>
+  <text x="595.0" y="298.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">hybrid_anc_tiny</text>
+  <text x="595.0" y="312.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">causal · lookahead 0</text>
+  <text x="595.0" y="326.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">limiter 0.2·tanh</text>
+  <line x1="440.0" y1="300.0" x2="490.0" y2="300.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="750.0" y="270.0" width="170.0" height="60.0" rx="8.0" fill="#ffffff" fill-opacity="1.0" stroke="#8a6d1f" stroke-width="1.6"/>
+  <rect x="750.0" y="270.0" width="170.0" height="4.0" rx="2.0" fill="#8a6d1f" fill-opacity="1.0" stroke="#8a6d1f" stroke-width="0"/>
+  <text x="835.0" y="295.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="14" font-weight="600" fill="#8a6d1f" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">S(z)  2차경로</text>
+  <text x="835.0" y="312.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">delay 1342 + 256</text>
+  <line x1="700.0" y1="300.0" x2="750.0" y2="300.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="725.0" y="288.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">y(t)</text>
+  <path d="M 470 120 L 985 120 L 985 195.0" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M 920 300 L 985 300 L 985 225.0" fill="none" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <circle cx="985.0" cy="210.0" r="15.0" fill="#ffffff" stroke="#16202c" stroke-width="1.6"/>
+  <line x1="977.5" y1="210.0" x2="992.5" y2="210.0" stroke="#16202c" stroke-width="1.8" stroke-opacity="1.0" stroke-linecap="round"/>
+  <line x1="985.0" y1="202.5" x2="985.0" y2="217.5" stroke="#16202c" stroke-width="1.8" stroke-opacity="1.0" stroke-linecap="round"/>
+  <text x="1015.0" y="120.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12" font-weight="normal" fill="#8a6d1f" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">d(t)</text>
+  <text x="1015.0" y="300.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12" font-weight="normal" fill="#8a6d1f" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">S·y(t)</text>
+  <line x1="985.0" y1="225.0" x2="985.0" y2="400.0" stroke="#9aa5b1" stroke-width="1.6" stroke-opacity="1.0" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <rect x="830.0" y="400.0" width="210.0" height="44.0" rx="8.0" fill="#fdf3f1" fill-opacity="1.0" stroke="#a8322d" stroke-width="1.6"/>
+  <text x="935.0" y="422.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="13.5" font-weight="600" fill="#a8322d" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">e(t) = d(t) + S·y(t)</text>
+  <text x="935.0" y="456.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="middle" dominant-baseline="middle">에러 마이크 — 손실 대상</text>
+  <text x="40.0" y="400.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">극성 규약</text>
+  <text x="40.0" y="420.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">측정 FIR 에 극성이 이미 들어 있다.</text>
+  <text x="40.0" y="436.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">어디에서도 추가 부호 반전을 하지 않는다.</text>
+  <text x="300.0" y="400.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" font-weight="700" fill="#16202c" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">선행량</text>
+  <text x="300.0" y="420.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">lead = S 1342 + handoff 256 − P 1489 = 109</text>
+  <text x="300.0" y="436.0" font-family="'Noto Sans Mono CJK KR', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="normal" fill="#7b8794" fill-opacity="1.0" text-anchor="start" dominant-baseline="middle">상쇄음이 소음보다 늦게 도착하는 만큼 미리 본다.</text>
+</svg>

@@ -51,9 +51,12 @@ import numpy as np
 __all__ = [
     "InterleavedProbe",
     "build_interleaved_probe",
+    "align_repeats",
     "channel_impulse_response",
+    "complex_consistency",
     "crest_factor_db",
     "dewarp_recording",
+    "estimate_repeat_delay",
     "estimate_transfer",
     "schroeder_phases",
     "tone_snr_db",
@@ -384,3 +387,122 @@ def dewarp_recording(
     index = np.arange(signal.size, dtype=np.float64)
     trajectory = np.interp(index, centre_values, delay_values)
     return np.interp(index + trajectory, index, signal, left=0.0, right=0.0)
+
+
+# ---------------------------------------------------------------------------
+# 반복 정렬 — 시간영역 온셋 대신 전달함수의 위상 기울기를 쓴다
+#
+# 대역제한 IR 은 선행 링잉이 길어 에너지 온셋 검출이 흔들린다. 그 흔들림이 그대로
+# "반복 지연 지터"로 보고되면, 실제로는 안정적인 측정이 게이트에서 떨어진다.
+#
+# 전달함수 위에서 재면 이 문제가 없다. 반복 k 의 관측을
+#     H_k(f) = H(f) · exp(-j 2π f τ_k / fs)
+# 로 두고 τ_k 를 |Σ_f H_k(f)* H_ref(f) e^{j2πfτ/fs}| 최대화로 찾는다. 합을 **재현되는
+# 대역에서만** 취하는 것이 중요하다 — 재현되지 않는 대역을 넣으면 그 잡음이 τ 추정을
+# 끌고 가 정렬이 오히려 나빠진다(실측 확인).
+# ---------------------------------------------------------------------------
+
+
+def estimate_repeat_delay(
+    frequencies_hz: np.ndarray,
+    transfer: np.ndarray,
+    reference: np.ndarray,
+    *,
+    sample_rate: int,
+    span_samples: float = 512.0,
+    resolution_samples: float = 0.25,
+    fit_band_hz: tuple[float, float] | None = None,
+) -> tuple[float, float]:
+    """``transfer`` 가 ``reference`` 보다 **얼마나 늦는지** τ(샘플)와 정렬 후 상관을 준다.
+
+    부호 규약: τ > 0 이면 이 반복이 기준보다 늦다. 정렬은 ``H·exp(+j2πfτ/fs)`` 로 되돌린다.
+    "보정량"이 아니라 "관측된 지연"으로 두어야 두 채널의 τ 차이가 그대로 상대 지연이 된다.
+    """
+
+    freq = np.asarray(frequencies_hz, dtype=np.float64).reshape(-1)
+    observed = np.asarray(transfer, dtype=np.complex128).reshape(-1)
+    anchor = np.asarray(reference, dtype=np.complex128).reshape(-1)
+    if not (freq.size == observed.size == anchor.size):
+        raise ValueError("주파수·관측·기준의 길이가 같아야 합니다")
+    if span_samples <= 0 or resolution_samples <= 0:
+        raise ValueError("span 과 resolution 은 양수여야 합니다")
+
+    mask = (
+        np.ones(freq.size, dtype=bool)
+        if fit_band_hz is None
+        else (freq >= float(fit_band_hz[0])) & (freq <= float(fit_band_hz[1]))
+    )
+    if int(mask.sum()) < 8:
+        raise ValueError(f"적합 대역 안의 톤이 너무 적습니다: {int(mask.sum())}개")
+
+    cross = observed[mask].conj() * anchor[mask]
+    taus = np.arange(-span_samples, span_samples + resolution_samples, resolution_samples)
+    scores = np.abs(
+        cross @ np.exp(-2j * np.pi * np.outer(taus, freq[mask]) / float(sample_rate)).T
+    )
+    index = int(np.argmax(scores))
+    if 0 < index < scores.size - 1:
+        y0, y1, y2 = scores[index - 1], scores[index], scores[index + 1]
+        denominator = y0 - 2.0 * y1 + y2
+        fraction = 0.5 * (y0 - y2) / denominator if denominator != 0.0 else 0.0
+    else:
+        fraction = 0.0
+    norm = float(np.linalg.norm(observed[mask]) * np.linalg.norm(anchor[mask]))
+    return (
+        float(taus[index] + fraction * resolution_samples),
+        float(scores[index] / norm) if norm > 0.0 else 0.0,
+    )
+
+
+def complex_consistency(stack: np.ndarray) -> float:
+    """반복 간 복소 전달함수의 평균 쌍별 정규화 내적 (0~1)."""
+
+    values = np.asarray(stack, dtype=np.complex128)
+    if values.ndim != 2 or values.shape[0] < 2:
+        raise ValueError(f"[repeats, bins] 이고 repeats>=2 여야 합니다: {values.shape}")
+    scores = []
+    for i in range(values.shape[0]):
+        for j in range(i + 1, values.shape[0]):
+            a, b = values[i], values[j]
+            denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+            scores.append(abs(complex(np.vdot(a, b))) / denominator if denominator else 0.0)
+    return float(np.mean(scores))
+
+
+def align_repeats(
+    frequencies_hz: np.ndarray,
+    stack: np.ndarray,
+    *,
+    sample_rate: int,
+    fit_band_hz: tuple[float, float] | None = None,
+    span_samples: float = 512.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """반복별 시간이동을 제거하고 ``(정렬된 stack, τ 배열, 정렬 신뢰도 배열)`` 을 준다.
+
+    신뢰도는 정렬 후 기준과의 정규화 상관이다. 이 값이 낮은 반복은 **τ 탐색이 봉우리를
+    찾지 못한 것**이며, 그 τ 는 시간축 정보가 아니라 잡음이다. 호출자는 이 값으로
+    실패한 반복을 걸러야 한다 — 걸러내지 않으면 잡음 τ 하나가 평균과 일관성을 함께
+    망가뜨린다(실측: 상대 τ 편차가 2 → 128 샘플로 튀었다).
+
+    기준은 첫 반복이다. 평균을 기준으로 반복 정제하면 좋아질 것 같지만 실측에서는
+    **악화됐다** — 정렬이 틀린 반복이 평균을 오염시켜 다음 회차를 더 끌고 갔다.
+    고정 기준이 이 자료에서는 더 안전하다.
+    """
+
+    freq = np.asarray(frequencies_hz, dtype=np.float64).reshape(-1)
+    values = np.asarray(stack, dtype=np.complex128)
+    reference = values[0]
+    taus = np.zeros(values.shape[0], dtype=np.float64)
+    scores = np.zeros(values.shape[0], dtype=np.float64)
+    aligned = np.empty_like(values)
+    for index in range(values.shape[0]):
+        tau, score = estimate_repeat_delay(
+            freq, values[index], reference, sample_rate=sample_rate,
+            span_samples=span_samples, fit_band_hz=fit_band_hz,
+        )
+        taus[index] = tau
+        scores[index] = score
+        aligned[index] = values[index] * np.exp(
+            2j * np.pi * freq * tau / float(sample_rate)
+        )
+    return aligned, taus, scores
