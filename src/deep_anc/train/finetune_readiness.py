@@ -48,6 +48,9 @@ INTERLEAVED_REQUIRED_FIELDS = (
     "tone_count",
     "tone_snr_median_db",
     "tone_snr_min_db",
+    # 일관성을 **어느 대역에서 쟀는지**. 이게 없으면 coherence_median 0.95 가 무엇에
+    # 대한 0.95 인지 알 수 없고, 좁은 대역에서 잰 값으로 넓은 대역을 주장할 수 있다.
+    "consistency_band_hz",
 )
 INTERLEAVED_MAX_PERIOD_SECONDS = 2.0   # 실측 위상 잔차가 2.26s 에서 2.33rad 로 무너진다
 INTERLEAVED_MIN_TONE_COUNT = 64
@@ -149,7 +152,11 @@ def audit_official_path_model(
                 raise ValueError(
                     "interleaved 측정 메타데이터가 없습니다: " + ", ".join(missing_il)
                 )
+            consistency_band = np.asarray(
+                data["consistency_band_hz"], dtype=np.float64
+            ).reshape(-1)
             interleaved = {
+                "consistency_band_hz": [float(v) for v in consistency_band[:2]],
                 "capture_id": str(_npz_scalar(data, "capture_id")),
                 "guard_bins": int(_npz_scalar(data, "interleave_guard_bins")),
                 "analysis_period_seconds": float(
@@ -197,6 +204,20 @@ def audit_official_path_model(
             )
         if not interleaved["capture_id"]:
             errors.append("capture_id가 비었습니다")
+        measured_consistency_band = interleaved["consistency_band_hz"]
+        if len(measured_consistency_band) < 2 or not all(
+            math.isfinite(v) for v in measured_consistency_band
+        ):
+            errors.append("consistency_band_hz가 유효하지 않습니다")
+        elif (
+            measured_consistency_band[0] > band_lo
+            or measured_consistency_band[1] < band_hi
+        ):
+            # 좁은 대역에서 잰 일관성으로 넓은 대역을 주장할 수 없다.
+            errors.append(
+                f"일관성 측정 대역 {tuple(measured_consistency_band)} 이 "
+                f"필수 대역 {required_band_hz} 를 덮지 못합니다"
+            )
     if repeats < 3:
         errors.append(f"ESS 반복 {repeats}회 < 3회")
     if not math.isfinite(consistency) or consistency < float(min_consistency):
@@ -306,13 +327,30 @@ def audit_init_checkpoint(
     *,
     expected_model_cfg: dict,
     expected_lead: int,
+    max_lead_mismatch_samples: int = 0,
     require_completed: bool = True,
     max_best_metric_db: float = 0.0,
     allowed_physics_statuses: tuple[str, ...] = (
         "secondary_surrogate_representation_pretrain",
     ),
 ) -> dict[str, Any]:
-    """사전학습 best와 같은 run의 완료된 last를 함께 검증한다."""
+    """사전학습 best와 같은 run의 완료된 last를 함께 검증한다.
+
+    ``max_lead_mismatch_samples`` 는 **init checkpoint 에만** 적용되는 허용 오차다.
+    기본 0(정확히 일치)이며, 늘리려면 설정에 명시적으로 적어야 한다.
+
+    왜 허용 오차가 필요한가. init checkpoint 는 정의상 surrogate 물리로 학습된 것이고
+    (physics_status=secondary_surrogate_representation_pretrain), 그때 쓴 lead 는
+    잠정값이다. 실측이 끝나면 lead 가 몇 샘플 달라지는 것이 정상이며, 그 차이를 흡수하는
+    것이 파인튜닝의 목적이다. 실제로 같은 양을 독립적으로 잰 값이 109/113/116/119 로
+    폭 10샘플이었다 — 측정 불확도 자체가 이 정도다.
+
+    이 허용이 게이트를 무르게 만들지 않는 이유: **정확성을 지키는 게이트는 따로 있다.**
+    ``path_delay_and_lead`` 가 "fine-tune 설정의 lead == 실측 S+handoff−P" 를 정확히
+    요구하고, 여기서 벗어나면 그쪽에서 걸린다. 이 허용은 오직 "어떤 checkpoint 에서
+    출발할 수 있는가"에만 관여한다. 과거 사고였던 lead=0 checkpoint 는 113 과 113 샘플
+    떨어져 있으므로 어떤 합리적 허용치로도 통과하지 못한다.
+    """
 
     checkpoint = _repo_path(path).resolve()
     if not checkpoint.is_file():
@@ -327,11 +365,16 @@ def audit_init_checkpoint(
             "init checkpoint physics_status가 승인된 corrected pretrain이 아닙니다: "
             f"{physics_status!r}; allowed={list(allowed_physics_statuses)}"
         )
+    tolerance = int(max_lead_mismatch_samples)
+    if tolerance < 0:
+        raise ValueError("max_lead_mismatch_samples는 음수일 수 없습니다")
     saved_lead = _checkpoint_lead(state)
-    if saved_lead != int(expected_lead):
+    lead_mismatch = abs(saved_lead - int(expected_lead))
+    if lead_mismatch > tolerance:
         raise ValueError(
             "init checkpoint digital-reference lead 불일치: "
-            f"checkpoint={saved_lead}, fine-tune={int(expected_lead)}"
+            f"checkpoint={saved_lead}, fine-tune={int(expected_lead)}, "
+            f"차이 {lead_mismatch} > 허용 {tolerance} samples"
         )
     best_metric = float(state.get("best_metric", float("nan")))
     if not math.isfinite(best_metric) or best_metric >= float(max_best_metric_db):
@@ -355,8 +398,10 @@ def audit_init_checkpoint(
             raise ValueError("best.pt와 last.pt의 immutable run 설정이 다릅니다")
         if _model_state_signature(last_state) != _model_state_signature(state):
             raise ValueError("best.pt와 last.pt의 model state 구조가 다릅니다")
-        if _checkpoint_lead(last_state) != int(expected_lead):
+        if abs(_checkpoint_lead(last_state) - int(expected_lead)) > tolerance:
             raise ValueError("last.pt의 digital-reference lead가 fine-tune 설정과 다릅니다")
+        if _checkpoint_lead(last_state) != saved_lead:
+            raise ValueError("best.pt와 last.pt의 lead가 서로 다릅니다")
         schedule = last_cfg.get("schedule", {}) or {}
         completion_target = int(
             last_cfg.get("run_until_step", schedule.get("total_steps", 0))
@@ -611,6 +656,9 @@ def audit_finetune_readiness(cfg: dict, *, full_recorded_qa: bool = True) -> dic
             init_value,
             expected_model_cfg=cfg.get("model", {}),
             expected_lead=configured_lead,
+            max_lead_mismatch_samples=int(
+                readiness_cfg.get("max_init_lead_mismatch_samples", 0)
+            ),
             require_completed=bool(
                 readiness_cfg.get("require_completed_init_checkpoint", True)
             ),

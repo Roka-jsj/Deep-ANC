@@ -18,9 +18,12 @@ import pytest
 
 from deep_anc.dsp.interleaved_probe import (
     build_interleaved_probe,
+    align_repeats,
     channel_impulse_response,
+    complex_consistency,
     crest_factor_db,
     dewarp_recording,
+    estimate_repeat_delay,
     estimate_transfer,
     schroeder_phases,
     tone_snr_db,
@@ -521,3 +524,64 @@ def test_dewarp_rejects_a_trajectory_with_no_trustworthy_points():
 def test_track_warp_rejects_short_signals():
     with pytest.raises(ValueError):
         track_warp(np.zeros(100), np.zeros(100), window=2048, search=4096)
+
+
+# ---------------------------------------------------------------------------
+# 반복 정렬 — 주파수영역
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_repeat_delay_recovers_a_known_shift():
+    freq = np.linspace(150.0, 1200.0, 200)
+    rng = np.random.default_rng(11)
+    reference = rng.normal(size=freq.size) + 1j * rng.normal(size=freq.size)
+    shift = 37.25
+    observed = reference * np.exp(-2j * np.pi * freq * shift / FS)
+    tau, score = estimate_repeat_delay(freq, observed, reference, sample_rate=FS)
+    assert tau == pytest.approx(shift, abs=0.3)
+    assert score > 0.99
+
+
+def test_estimate_repeat_delay_reports_low_score_for_unrelated_data():
+    freq = np.linspace(150.0, 1200.0, 200)
+    rng = np.random.default_rng(12)
+    a = rng.normal(size=freq.size) + 1j * rng.normal(size=freq.size)
+    b = rng.normal(size=freq.size) + 1j * rng.normal(size=freq.size)
+    _, score = estimate_repeat_delay(freq, a, b, sample_rate=FS)
+    assert score < 0.5, "무관한 두 관측이 높은 신뢰도를 받으면 이상치 제거가 무력해진다"
+
+
+def test_align_repeats_removes_per_repeat_shifts():
+    freq = np.linspace(150.0, 1200.0, 200)
+    rng = np.random.default_rng(13)
+    truth = rng.normal(size=freq.size) + 1j * rng.normal(size=freq.size)
+    shifts = np.array([0.0, 12.0, -31.0, 47.5, -8.25])
+    stack = np.stack([
+        truth * np.exp(-2j * np.pi * freq * s / FS) for s in shifts
+    ])
+    assert complex_consistency(stack) < 0.9
+    aligned, taus, scores = align_repeats(freq, stack, sample_rate=FS)
+    assert complex_consistency(aligned) > 0.999
+    assert np.allclose(taus, shifts, atol=0.3)
+    assert np.all(scores > 0.99)
+
+
+def test_align_repeats_flags_a_corrupted_repeat():
+    """정렬 신뢰도가 낮은 반복은 τ 가 아니라 잡음이다 — 호출자가 버릴 수 있어야 한다."""
+
+    freq = np.linspace(150.0, 1200.0, 200)
+    rng = np.random.default_rng(14)
+    truth = rng.normal(size=freq.size) + 1j * rng.normal(size=freq.size)
+    stack = np.stack([
+        truth,
+        truth * np.exp(-2j * np.pi * freq * 9.0 / FS),
+        rng.normal(size=freq.size) + 1j * rng.normal(size=freq.size),   # 손상
+    ])
+    _, _, scores = align_repeats(freq, stack, sample_rate=FS)
+    assert scores[0] > 0.99 and scores[1] > 0.99
+    assert scores[2] < 0.5
+
+
+def test_complex_consistency_needs_two_repeats():
+    with pytest.raises(ValueError):
+        complex_consistency(np.ones((1, 10), dtype=complex))

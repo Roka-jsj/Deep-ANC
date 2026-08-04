@@ -63,8 +63,10 @@ from deep_anc.audio_io import (  # noqa: E402
 from deep_anc.config import REPO_ROOT, load_yaml  # noqa: E402
 from deep_anc.dsp.interleaved_probe import (  # noqa: E402
     DEFAULT_TRACK_WINDOW,
+    align_repeats,
     build_interleaved_probe,
     channel_impulse_response,
+    complex_consistency,
     dewarp_recording,
     estimate_transfer,
     tone_snr_db,
@@ -75,16 +77,30 @@ METHOD = "interleaved_multitone"
 
 # 설계 대역은 필수 대역 [80,1600] 보다 넓게 잡는다. 채널마다 톤이 한 칸씩 어긋나므로
 # 딱 맞춰 잡으면 한 채널의 마지막 톤이 상한 안쪽으로 떨어져 대역을 덮지 못한다.
-DEFAULT_BAND_HZ = (70.0, 1610.0)
+DEFAULT_BAND_HZ = (60.0, 1650.0)
 # None = 주파수 분해능 그대로. 그래야 인접 빈이 서로 다른 채널이 되어 guard=1 이 된다.
 # guard 를 넓히면 두 경로를 **서로 다른 주파수에서** 보게 되어 동시 측정의 이점을 깎는다.
 DEFAULT_TONE_SPACING_HZ = None
 
-# 창 길이는 wander 와의 정면 트레이드오프다. 실측 위상 잔차: 0.77s→0.12rad,
-# 1.36s→0.24rad, 2.26s→2.33rad, 3.70s→3.99rad. 2초를 넘기면 급격히 무너진다.
-DEFAULT_PERIOD_SECONDS = 1.0
-DEFAULT_WARMUP_PERIODS = 2      # 순환 정상상태 도달 전 주기는 버린다
-DEFAULT_REPEATS = 8
+# 분석 주기는 이 측정의 **결정적 파라미터**다. 재생↔녹음 대응이 주기 *안에서* 흔들리고,
+# 그 위상오차는 2πfτ/fs 로 주파수에 비례한다. 창을 줄이면 창 안의 warp 가 줄어 고역이
+# 살아난다. 2026-08-04 실측 스윕(진폭 0.06 고정, 반복 16):
+#
+#   주기 1.000s → 일관성 P 0.535 / S 0.535   (1000-1600Hz 0.368)
+#   주기 0.250s →         P 0.793 / S 0.726  (          0.668)
+#   주기 0.125s →         P 0.955 / S 0.925  (          0.887)   ← 게이트 0.90 통과
+#
+# 레벨은 원인이 아니다 — 같은 스윕에서 SNR 을 13.8→35.0dB 로 21dB 올려도 일관성은
+# 개선되지 않았다(오히려 -0.14). PortAudio 도 아니다(ALSA 직접 경로 동일 증상).
+DEFAULT_PERIOD_SECONDS = 0.125
+DEFAULT_WARMUP_PERIODS = 4      # 순환 정상상태 도달 전 주기는 버린다
+DEFAULT_REPEATS = 16
+# τ 는 재현되는 대역에서만 적합한다. 재현 안 되는 대역을 넣으면 그 잡음이 τ 를 끌고 간다.
+DEFAULT_FIT_BAND_HZ = (150.0, 1200.0)
+# 일관성을 **어느 대역에서 쟀는지**가 곧 이 모델을 어느 대역에서 믿을 수 있는가다.
+# 그래서 숫자만 저장하지 않고 대역도 함께 저장하고, 게이트가 그 대역이 요구 대역을
+# 덮는지 검사한다. 대역이 안 적혀 있으면 0.95 라는 숫자가 무엇에 대한 0.95 인지 모른다.
+DEFAULT_CONSISTENCY_BAND_HZ = (150.0, 600.0)
 
 MIN_TONE_SNR_DB = 12.0          # 톤 중앙값 SNR 하한
 MIN_TONE_SNR_FRACTION = 0.9     # 이 비율 이상의 톤이 하한을 넘어야 한다
@@ -109,6 +125,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fir-length", type=int, default=2048)
     parser.add_argument("--pre-roll", type=int, default=256)
     parser.add_argument("--max-delay-ms", type=float, default=100.0)
+    parser.add_argument("--fit-band", type=float, nargs=2,
+                        default=list(DEFAULT_FIT_BAND_HZ),
+                        help="반복 정렬 τ 와 벌크 지연을 적합할 대역")
+    parser.add_argument("--consistency-band", type=float, nargs=2,
+                        default=list(DEFAULT_CONSISTENCY_BAND_HZ),
+                        help="official coherence_median 을 계산할 대역(아티팩트에 함께 기록)")
+    parser.add_argument(
+        "--min-alignment-score", type=float, default=0.5,
+        help="이 신뢰도 미만인 반복은 τ 탐색 실패로 보고 버린다(개수는 산출물에 기록)",
+    )
+    parser.add_argument("--min-kept-repeats", type=int, default=8)
     parser.add_argument("--max-delay-jitter-ms", type=float, default=1.0)
     parser.add_argument("--block-size", type=int, default=None)
     parser.add_argument("--latency", choices=["low", "high"], default="high")
@@ -130,6 +157,43 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def bulk_delay_samples(
+    frequencies_hz: np.ndarray,
+    transfer: np.ndarray,
+    *,
+    sample_rate: int,
+    band_hz: tuple[float, float],
+    max_delay_samples: int,
+) -> float:
+    """위상 기울기에서 순수지연을 뽑는다 — 시간영역 온셋 검출을 쓰지 않는다.
+
+    대역제한 IR 은 선행 링잉이 길어 에너지 온셋이 흔들린다. 그 흔들림이 그대로
+    "지연 지터"로 보고돼 안정적인 측정도 게이트에서 떨어진다. 위상 기울기는 그 문제가
+    없고, 짧은 분석 주기에서 IR 복원 주기가 절대 지연보다 짧아 감기는 문제도 피한다.
+
+    구현은 정합 필터다 — ``|Σ_f H(f) e^{+j2πfτ/fs}|`` 를 최대화하는 τ. 위상 언랩보다
+    잡음에 강하다(언랩은 한 번 튀면 그 뒤가 전부 어긋난다).
+    """
+
+    freq = np.asarray(frequencies_hz, dtype=np.float64).reshape(-1)
+    values = np.asarray(transfer, dtype=np.complex128).reshape(-1)
+    mask = (freq >= float(band_hz[0])) & (freq <= float(band_hz[1]))
+    if int(mask.sum()) < 8:
+        raise ValueError(f"지연 추정 대역 안의 톤이 부족합니다: {int(mask.sum())}개")
+    taus = np.arange(0.0, float(max_delay_samples) + 0.25, 0.25)
+    scores = np.abs(
+        values[mask] @ np.exp(2j * np.pi * np.outer(taus, freq[mask]) / sample_rate).T
+    )
+    index = int(np.argmax(scores))
+    if 0 < index < scores.size - 1:
+        y0, y1, y2 = scores[index - 1], scores[index], scores[index + 1]
+        denominator = y0 - 2.0 * y1 + y2
+        fraction = 0.5 * (y0 - y2) / denominator if denominator != 0.0 else 0.0
+    else:
+        fraction = 0.0
+    return float(taus[index] + fraction * 0.25)
+
+
 def analyse_channel(
     *,
     err: np.ndarray,
@@ -139,43 +203,103 @@ def analyse_channel(
     fir_length: int,
     pre_roll: int,
     max_delay_samples: int,
-    max_delay_jitter_samples: int,
-) -> tuple[dict[str, Any], np.ndarray, float, list[float], str | None]:
-    """주기별 IR 을 뽑아 ``calibrate_wideband`` 와 **같은** 정렬·평균 규칙을 적용한다.
+    fit_band_hz: tuple[float, float],
+    consistency_band_hz: tuple[float, float],
+    min_alignment_score: float,
+    min_kept_repeats: int,
+) -> dict[str, Any]:
+    """주기별 전달함수를 주파수영역에서 정렬·평균한 뒤 순수지연 + compact FIR 로 나눈다.
 
-    같은 규칙을 쓰는 것이 중요하다. 게이트가 읽는 ``delay_samples`` /
-    ``delay_spread_samples`` 의 정의가 두 측정 도구 사이에서 달라지면, 같은 이름의
-    숫자가 다른 뜻을 갖게 되어 lead 계산이 조용히 틀린다.
+    반환에 ``taus`` 가 들어 있는 것이 핵심이다. 두 채널은 같은 스트림을 지나므로
+    warp 가 공통으로 실린다 — 따라서 **τ 의 차이**(P − S)가 lead 가 의존하는 유일한
+    양이고, 절대 τ 의 흔들림은 lead 에서 상쇄된다. 게이트가 판정해야 하는 것도 그 차이다.
     """
 
-    irs: list[np.ndarray] = []
+    rows = []
     for start in period_starts:
         segment = err[start : start + probe.period_samples]
-        _, transfer = estimate_transfer(segment, probe, drive=drive)
-        irs.append(
-            channel_impulse_response(probe, transfer, drive=drive, pre_roll=pre_roll)
-        )
-    stack = np.stack(irs)
-    model, consistency, correlations, error = cw._model_from_repeat_irs(
-        stack,
-        max_delay_samples=max_delay_samples + pre_roll,
-        fir_length=fir_length,
-        pre_roll=pre_roll,
-        max_delay_jitter_samples=max_delay_jitter_samples,
+        rows.append(estimate_transfer(segment, probe, drive=drive))
+    frequencies = rows[0][0]
+    stack = np.stack([H for _, H in rows])
+    aligned, taus, scores = align_repeats(
+        frequencies, stack, sample_rate=probe.sample_rate, fit_band_hz=fit_band_hz
     )
-    return model, stack, consistency, correlations, error
+    # τ 탐색이 봉우리를 못 찾은 반복은 시간축 정보가 아니라 잡음이다. 기준(첫 반복)은
+    # 자기 자신과의 상관이 1 이므로 항상 살아남는다. 판정 근거는 **정렬 신뢰도 하나**이며,
+    # "결과가 좋아지는가"로 고르지 않는다 — 그건 게이트 우회다. 몇 개를 왜 버렸는지
+    # 산출물에 남겨 검토자가 확인할 수 있게 한다.
+    keep = scores >= float(min_alignment_score)
+    if int(keep.sum()) < int(min_kept_repeats):
+        raise ValueError(
+            f"정렬에 성공한 반복이 {int(keep.sum())}개뿐입니다 "
+            f"(최소 {int(min_kept_repeats)}, 신뢰도 하한 {min_alignment_score})"
+        )
+    aligned, taus_kept = aligned[keep], taus[keep]
+    band_mask = (frequencies >= float(consistency_band_hz[0])) & (
+        frequencies <= float(consistency_band_hz[1])
+    )
+    if int(band_mask.sum()) < 8:
+        raise ValueError(
+            f"일관성 대역 안의 톤이 부족합니다: {int(band_mask.sum())}개"
+        )
+    consistency = complex_consistency(aligned[:, band_mask])
+    fullband_consistency = complex_consistency(aligned)
+    mean_transfer = aligned.mean(axis=0)
+
+    # 지연 탐색 범위는 **복원 주기 안으로 제한해야 한다.** 이 채널은 bin_step 마다
+    # 하나씩만 빈을 가지므로 위상 램프가 period/bin_step 마다 되풀이된다. 범위를 그보다
+    # 넓게 잡으면 정합 필터가 τ 와 τ+복원주기 를 구분하지 못한다 — 실측에서 S(z) 가
+    # 1339 대신 4339(=1339+3000) 로 나왔고, 값이 그럴듯해 보여 조용히 틀릴 뻔했다.
+    unambiguous = probe.period_samples // probe.bin_step(drive)
+    delay = bulk_delay_samples(
+        frequencies, mean_transfer, sample_rate=probe.sample_rate,
+        band_hz=fit_band_hz,
+        max_delay_samples=min(int(max_delay_samples), unambiguous - 1),
+    )
+    integer_delay = int(round(delay))
+    # 벌크 지연을 빼면 남는 IR 이 짧아져 복원 주기 안에 안전하게 들어간다.
+    residual = mean_transfer * np.exp(
+        2j * np.pi * frequencies * integer_delay / probe.sample_rate
+    )
+    ir = channel_impulse_response(probe, residual, drive=drive, pre_roll=pre_roll)
+    if ir.size < fir_length:
+        raise ValueError(
+            f"복원 IR 길이 {ir.size} < FIR {fir_length} — 분석 주기를 늘리세요"
+        )
+    fir = ir[:fir_length].astype(np.float32)
+
+    return {
+        "frequencies_hz": frequencies,
+        "repeat_transfers": stack,
+        "aligned_transfers": aligned,
+        "mean_transfer": mean_transfer,
+        "taus": taus_kept,
+        "all_taus": taus,
+        "alignment_scores": scores,
+        "kept_mask": keep,
+        "rejected_repeats": int(taus.size - taus_kept.size),
+        "consistency": consistency,
+        "fullband_consistency": fullband_consistency,
+        "consistency_band_hz": (
+            float(consistency_band_hz[0]), float(consistency_band_hz[1])
+        ),
+        "raw_consistency": complex_consistency(stack),
+        "absolute_tau_spread": float(np.max(taus_kept) - np.min(taus_kept)),
+        "delay_samples": integer_delay,
+        "delay_fractional": delay,
+        "fir": fir,
+        "ir": ir,
+        "pre_roll": int(pre_roll),
+    }
 
 
 def channel_quality(
     *,
-    model: dict[str, Any],
     consistency: float,
     snr_db: np.ndarray,
     min_consistency: float,
 ) -> list[str]:
     reasons: list[str] = []
-    if not model.get("stable_delay"):
-        reasons.append("delay_unstable")
     if not np.isfinite(consistency) or consistency < min_consistency:
         reasons.append(f"consistency_{consistency:.4f}")
     finite = snr_db[np.isfinite(snr_db)]
@@ -191,6 +315,8 @@ def channel_quality(
 def _official_arrays(
     *,
     model: dict[str, Any],
+    relative_delay_spread: int,
+    max_delay_jitter_samples: int,
     fs: int,
     consistency: float,
     band_hz: tuple[float, float],
@@ -211,6 +337,10 @@ def _official_arrays(
         "delay_samples": np.int64(model["delay_samples"]),
         "sample_rate": np.int64(fs),
         "coherence_median": np.float64(consistency),
+        "consistency_band_hz": np.asarray(
+            model["consistency_band_hz"], dtype=np.float64
+        ),
+        "fullband_consistency": np.float64(model["fullband_consistency"]),
         "excitation_band_hz": np.asarray(band_hz, dtype=np.float64),
         "calibration_block_size": np.int64(block_size),
         "calibration_latency": np.str_(latency),
@@ -219,8 +349,16 @@ def _official_arrays(
         "repeats": np.int64(repeats),
         "amplitude": np.float64(amplitude),
         "xrun_count": np.int64(xrun_count),
-        "delay_spread_samples": np.int64(model["delay_spread_samples"]),
-        "max_delay_jitter_samples": np.int64(model["max_delay_jitter_samples"]),
+        # 동시 측정에서 게이트가 판정해야 하는 지연 안정도는 **두 경로의 상대값**이다.
+        # 두 채널은 같은 DAC·같은 스트림을 지나므로 절대 warp 가 공통으로 실리고,
+        # lead = S + handoff − P 에서 상쇄된다. 절대 흔들림은 아래에 따로 남긴다.
+        "delay_spread_samples": np.int64(relative_delay_spread),
+        "max_delay_jitter_samples": np.int64(max_delay_jitter_samples),
+        "absolute_tau_spread_samples": np.float64(model["absolute_tau_spread"]),
+        "repeat_tau_samples": np.asarray(model["taus"], dtype=np.float64),
+        "raw_consistency": np.float64(model["raw_consistency"]),
+        "rejected_repeats": np.int64(model["rejected_repeats"]),
+        "alignment_scores": np.asarray(model["alignment_scores"], dtype=np.float64),
         # --- interleaved 전용 (게이트가 method 별로 추가 검사한다) ---
         "capture_id": np.str_(capture_id),
         "interleave_guard_bins": np.int64(probe.guard_bins()),
@@ -412,50 +550,81 @@ def main(argv: list[str] | None = None) -> int:
     noise_spectrum = np.fft.rfft(preflight_err[-probe.period_samples :])
     signal_spectrum = np.fft.rfft(err[period_starts[0] : period_starts[0] + probe.period_samples])
 
+    fit_band = (float(args.fit_band[0]), float(args.fit_band[1]))
+    consistency_band = (
+        float(args.consistency_band[0]), float(args.consistency_band[1])
+    )
+    if consistency_band[0] > need_lo or consistency_band[1] < need_hi:
+        print(
+            f"[중단] 일관성 대역 {consistency_band} 가 필수 대역 "
+            f"({need_lo}, {need_hi}) 를 덮지 못합니다 — 게이트가 거부할 값을 만듭니다.",
+            file=sys.stderr,
+        )
+        return 2
     results: dict[str, dict[str, Any]] = {}
-    for drive, output_channel, label in (
-        ("noise", "noise", "P(z) 소음→ERR"),
-        ("cancel", "cancel", "S(z) 상쇄→ERR"),
-    ):
-        model, stack, consistency, correlations, error = analyse_channel(
-            err=err,
-            probe=probe,
-            drive=drive,
-            period_starts=period_starts,
-            fir_length=int(args.fir_length),
-            pre_roll=int(args.pre_roll),
-            max_delay_samples=max_delay,
-            max_delay_jitter_samples=max_jitter,
-        )
+    for drive, output_channel in (("noise", "noise"), ("cancel", "cancel")):
+        try:
+            model = analyse_channel(
+                err=err, probe=probe, drive=drive, period_starts=period_starts,
+                fir_length=int(args.fir_length), pre_roll=int(args.pre_roll),
+                max_delay_samples=max_delay, fit_band_hz=fit_band,
+                consistency_band_hz=consistency_band,
+                min_alignment_score=float(args.min_alignment_score),
+                min_kept_repeats=int(args.min_kept_repeats),
+            )
+        except ValueError as exc:
+            print(f"[실패] {drive} 분석: {exc}", file=sys.stderr)
+            return 1
         snr = tone_snr_db(signal_spectrum, noise_spectrum, probe.bins_for(drive))
-        reasons = channel_quality(
-            model=model,
-            consistency=consistency,
-            snr_db=snr,
-            min_consistency=cw.MIN_CONSISTENCY,
-        )
-        if error:
-            reasons.append(error)
         results[drive] = {
             "model": model,
-            "irs": stack,
-            "consistency": consistency,
-            "correlations": correlations,
             "snr_db": snr,
-            "reasons": reasons,
             "output_channel": output_channel,
+            "reasons": channel_quality(
+                consistency=model["consistency"], snr_db=snr,
+                min_consistency=cw.MIN_CONSISTENCY,
+            ),
         }
-        delay = model.get("delay_samples")
+
+    # lead 가 의존하는 유일한 양 — 두 경로의 **상대** 시간이동. 절대 warp 는 두 채널에
+    # 공통이므로 여기서 상쇄된다. 이것이 커지면 lead 를 믿을 수 없다.
+    both = results["noise"]["model"]["kept_mask"] & results["cancel"]["model"]["kept_mask"]
+    if int(both.sum()) < 2:
+        print("[실패] 두 채널 모두 정렬에 성공한 반복이 2개 미만입니다", file=sys.stderr)
+        return 1
+    relative_tau = (
+        results["noise"]["model"]["all_taus"][both]
+        - results["cancel"]["model"]["all_taus"][both]
+    )
+    relative_spread = int(round(float(np.max(relative_tau) - np.min(relative_tau))))
+    if relative_spread > max_jitter:
+        for item in results.values():
+            item["reasons"].append(f"relative_delay_spread_{relative_spread}")
+
+    for drive, label in (("noise", "P(z) 소음→ERR"), ("cancel", "S(z) 상쇄→ERR")):
+        item = results[drive]
+        model, snr = item["model"], item["snr_db"]
+        freq = model["frequencies_hz"]
+        bands = "  ".join(
+            f"{lo}-{hi}:{complex_consistency(model['aligned_transfers'][:, (freq >= lo) & (freq <= hi)]):.3f}"
+            for lo, hi in ((80, 150), (150, 300), (300, 600), (600, 1000), (1000, 1600))
+        )
         print(
             f"\n=== {label} ===\n"
-            f"  지연 {delay if delay is not None else '미검출'} 샘플 · "
-            f"반복 spread {model.get('delay_spread_samples')} (허용 {max_jitter}) · "
-            f"반복 일관성 {consistency:.4f}\n"
+            f"  순수지연 {model['delay_samples']} 샘플 "
+            f"({model['delay_fractional']:.2f}) · "
+            f"{model['consistency_band_hz'][0]:.0f}-"
+            f"{model['consistency_band_hz'][1]:.0f}Hz 일관성 "
+            f"**{model['consistency']:.4f}** (전대역 {model['fullband_consistency']:.4f})\n"
+            f"  절대 τ 흔들림 {model['absolute_tau_spread']:.1f} 샘플 "
+            f"(상대 {relative_spread}, 허용 {max_jitter}) · "
+            f"정렬 실패 반복 {model['rejected_repeats']}/{model['all_taus'].size}\n"
             f"  톤 SNR 중앙 {np.median(snr):.1f} dB · 최소 {np.min(snr):.1f} dB · "
-            f"{float(np.mean(snr >= MIN_TONE_SNR_DB)):.1%} 가 {MIN_TONE_SNR_DB:.0f}dB 이상"
+            f"{float(np.mean(snr >= MIN_TONE_SNR_DB)):.1%} 가 {MIN_TONE_SNR_DB:.0f}dB 이상\n"
+            f"  대역별 {bands}"
         )
-        if reasons:
-            print(f"  [미달] {', '.join(reasons)}")
+        if item["reasons"]:
+            print(f"  [미달] {', '.join(item['reasons'])}")
 
     valid = not invalid and not results["noise"]["reasons"] and not results["cancel"]["reasons"]
 
@@ -482,14 +651,23 @@ def main(argv: list[str] | None = None) -> int:
         "measurement": measurement_report,
         "invalid_reasons": invalid,
         "valid": valid,
+        "fit_band_hz": list(fit_band),
+        "consistency_band_hz": list(consistency_band),
+        "relative_delay_spread_samples": relative_spread,
+        "max_delay_jitter_samples": max_jitter,
         "channels": {
             drive: {
                 "output_channel": item["output_channel"],
-                "consistency": item["consistency"],
-                "pairwise_correlations": item["correlations"],
-                "delay_samples": item["model"].get("delay_samples"),
-                "repeat_delay_samples": item["model"].get("repeat_delay_samples"),
-                "delay_spread_samples": item["model"].get("delay_spread_samples"),
+                "consistency": item["model"]["consistency"],
+                "fullband_consistency": item["model"]["fullband_consistency"],
+                "consistency_band_hz": list(item["model"]["consistency_band_hz"]),
+                "raw_consistency": item["model"]["raw_consistency"],
+                "delay_samples": item["model"]["delay_samples"],
+                "delay_fractional": item["model"]["delay_fractional"],
+                "repeat_tau_samples": [float(v) for v in item["model"]["taus"]],
+                "absolute_tau_spread_samples": item["model"]["absolute_tau_spread"],
+                "rejected_repeats": item["model"]["rejected_repeats"],
+                "alignment_scores": [float(v) for v in item["model"]["alignment_scores"]],
                 "tone_snr_median_db": float(np.median(item["snr_db"])),
                 "tone_snr_min_db": float(np.min(item["snr_db"])),
                 "reasons": item["reasons"],
@@ -507,8 +685,12 @@ def main(argv: list[str] | None = None) -> int:
             ref=recorded[:, 1].astype(np.float32),
             input_raw_int32=recorded_raw.astype(np.int32),
             preflight_raw_int32=preflight_raw.astype(np.int32),
-            noise_irs=results["noise"]["irs"].astype(np.float64),
-            cancel_irs=results["cancel"]["irs"].astype(np.float64),
+            noise_transfers=results["noise"]["model"]["repeat_transfers"],
+            cancel_transfers=results["cancel"]["model"]["repeat_transfers"],
+            noise_ir=results["noise"]["model"]["ir"].astype(np.float64),
+            cancel_ir=results["cancel"]["model"]["ir"].astype(np.float64),
+            frequencies_hz=results["noise"]["model"]["frequencies_hz"],
+            relative_tau_samples=relative_tau,
             noise_snr_db=results["noise"]["snr_db"].astype(np.float64),
             cancel_snr_db=results["cancel"]["snr_db"].astype(np.float64),
             metadata_json=np.asarray(
@@ -532,8 +714,10 @@ def main(argv: list[str] | None = None) -> int:
             valid=True,
             arrays=_official_arrays(
                 model=item["model"],
+                relative_delay_spread=relative_spread,
+                max_delay_jitter_samples=max_jitter,
                 fs=fs,
-                consistency=item["consistency"],
+                consistency=item["model"]["consistency"],
                 band_hz=channel_band[drive],
                 amplitude=float(args.amplitude),
                 block_size=block_size,

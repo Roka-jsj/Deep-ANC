@@ -177,8 +177,13 @@ def test_d_noise_default_geometry(cfgs):
 
 def test_d_noise_no_double_count(cfgs, rir_bank):
     """리뷰 결함 #1 회귀: RIR 에 t(NS→ERR) 온셋이 포함되므로 dataset 추가 지연은
-    총지연 − t(NS→ERR) 이어야 하고, 결과 d 의 온셋은 총지연(≈1489)과 일치해야 한다."""
+    총지연 − t(NS→ERR) 이어야 하고, 결과 d 의 온셋은 총지연과 일치해야 한다.
+
+    총지연 값을 여기에 박아두지 않는다. 실측이 끝나면 duct.yaml 이 값을 갖고, 그때
+    상수를 박아둔 테스트는 검사하려는 불변식(이중 계상 없음)과 무관하게 깨진다.
+    """
     from deep_anc.config import duct_distance_samples
+    from deep_anc.dsp.secondary_path import load_secondary_path
     from deep_anc.data.synth_dataset import _delay_np
     from deep_anc.dsp.filters import fft_filter
 
@@ -187,7 +192,12 @@ def test_d_noise_no_double_count(cfgs, rir_bank):
     data["digital_primary_path_mode"] = "rir_surrogate"
     fs = 48000
     ds = SynthANCDataset(data, duct, split="train", seed=1, rir_bank=rir_bank)
-    total = default_d_noise_delay(duct, fs, s_path_delay=1342)
+    configured = duct["digital_reference"].get("d_noise_delay_samples")
+    if configured is not None:
+        total = int(configured)
+    else:
+        secondary = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
+        total = default_d_noise_delay(duct, fs, s_path_delay=secondary.delay_samples)
     t_ns_err = duct_distance_samples(duct, "noise_speaker", "error_mic", fs)
     assert ds.d_noise_total == total
     assert ds.d_noise_delay == total - t_ns_err

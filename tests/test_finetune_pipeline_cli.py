@@ -9,8 +9,11 @@
    이미 학습이 돌고 있음(조사 대상). 구버전은 둘 다 1로 뭉갰다.
 3. **status.json 은 advisory 다.** 위조해도 게이트 판정이 바뀌지 않는다.
 
-여기서 쓰는 config 는 저장소의 실제 ``configs/train_finetune.yaml`` 이며, 실측 P/S 와
-recorded 세션이 없으므로 설계대로 NOT READY 다. GPU 도 실데이터도 필요 없다.
+여기서 쓰는 config 는 저장소의 실제 ``configs/train_finetune.yaml`` 이지만, 경로 해석을
+tmp 로 완전히 격리해 recorded/checkpoint 가 없는 상태를 **구성**한다. 저장소가 실제로
+READY 인지와 무관하게 NOT READY 경로가 검사되어야 하기 때문이다 — 예전에는 저장소가
+우연히 NOT READY 라서 통과하던 테스트였고, 실측이 끝나자 전부 깨졌다.
+GPU 도 실데이터도 필요 없다.
 """
 
 from __future__ import annotations
@@ -58,18 +61,24 @@ ARGS = [
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    """저장소를 tmp 로 복제하고 REPO_ROOT 3곳을 모두 교체한다.
+    """저장소를 tmp 로 복제하고 **REPO_ROOT 를 들고 있는 모든 모듈**을 교체한다.
 
-    셋 중 하나만 바꾸면 부모가 보는 state dir 과 자식이 train.lock 을 쓰는 dir 이
-    어긋난다 — 실제로 고쳤던 결함이라 테스트에서도 함께 묶어 둔다.
+    ``from ..config import REPO_ROOT`` 는 값을 복사해 가므로 config 모듈만 바꿔서는
+    소용이 없다. 하나라도 빠지면 그 모듈은 진짜 저장소를 읽고, 부모가 보는 state dir 과
+    자식이 train.lock 을 쓰는 dir 이 어긋난다 — 실제로 고쳤던 결함이다.
+
+    특히 ``finetune_readiness`` 가 빠져 있었다. 그래서 이 테스트는 tmp 를 본다고 믿으면서
+    실제로는 저장소의 data/ 와 runs/ 를 읽고 있었고, 저장소가 NOT READY 인 동안에만
+    우연히 통과했다.
     """
 
     shutil.copytree(REPO_ROOT / "configs", tmp_path / "configs")
     shutil.copytree(REPO_ROOT / "assets", tmp_path / "assets")
     import deep_anc.config as config_module
+    import deep_anc.train.finetune_readiness as readiness_module
     import deep_anc.train.process_lock as lock_module
 
-    for module in (config_module, lock_module, pipeline):
+    for module in (config_module, lock_module, readiness_module, pipeline):
         monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -101,7 +110,13 @@ def test_not_ready_never_creates_run_dir_and_writes_only_state_dir(repo):
     assert status["exit_code"] == EXIT_NOT_READY
     assert status["advisory"] is True
     assert status["run_dir_created_before_ready"] is False
-    assert "official_primary_path" in status["readiness"]["failed_checks"]
+    # fixture 가 data/ 와 runs/ 를 복제하지 않으므로 이 둘은 반드시 실패한다.
+    # 특정 검사 이름을 고를 때는 **fixture 가 보장하는 것**을 골라야 한다 —
+    # 예전에는 official_primary_path 를 골랐는데, 그건 저장소가 아직 실측을 안 했다는
+    # 일시적 사실에 기댄 것이라 실측이 끝나자 깨졌다.
+    failed = status["readiness"]["failed_checks"]
+    assert "recorded_dataset_qa" in failed
+    assert "completed_init_checkpoint" in failed
 
 
 def test_audit_lands_in_autostart_state_dir_not_run_dir(repo):

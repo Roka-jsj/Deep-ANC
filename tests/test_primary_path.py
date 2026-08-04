@@ -142,9 +142,12 @@ def test_measured_primary_rejects_conflicting_delay(tmp_path, configs):
         resolve_digital_primary_path(data, duct, 48_000, secondary)
 
 
-def test_secondary_surrogate_reuses_s_gain_with_d_noise_delay(configs):
+def test_secondary_surrogate_falls_back_to_geometry_when_unmeasured(configs):
+    """d_noise 를 실측하기 전에는 기하 예측을 쓴다."""
+
     data, duct = deepcopy(configs)
     data["digital_primary_path_mode"] = "secondary_surrogate"
+    duct["digital_reference"]["d_noise_delay_samples"] = None
     secondary = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
 
     primary, total_delay = resolve_digital_primary_path(data, duct, 48_000, secondary)
@@ -156,11 +159,67 @@ def test_secondary_surrogate_reuses_s_gain_with_d_noise_delay(configs):
     np.testing.assert_array_equal(primary.fir, secondary.fir)
 
 
+def test_secondary_surrogate_prefers_measured_d_noise_over_geometry(configs):
+    """실측값이 있으면 기하 예측을 덮는다 — 추정보다 측정이 우선이다."""
+
+    data, duct = deepcopy(configs)
+    data["digital_primary_path_mode"] = "secondary_surrogate"
+    duct["digital_reference"]["d_noise_delay_samples"] = 1234
+    secondary = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
+
+    primary, total_delay = resolve_digital_primary_path(data, duct, 48_000, secondary)
+
+    assert primary.delay_samples == total_delay == 1234
+    assert 1234 != default_d_noise_delay(duct, 48_000, secondary.delay_samples)
+
+
+def test_configured_d_noise_agrees_with_duct_geometry(configs):
+    """실측 d_noise 와 기하 예측이 크게 어긋나면 배선/좌표 어느 쪽이 틀린 것이다.
+
+    2026-08-05 실측 1608 vs 기하 1612 — 4샘플(83µs) 차. 이 정도는 마이크 좌표
+    불확실성(에러마이크 x=1.100 은 아직 잠정값)으로 충분히 설명된다. 이 검사가
+    깨지면 duct.yaml 좌표나 P/S 측정 중 하나를 다시 봐야 한다.
+    """
+
+    _, duct = configs
+    configured = duct["digital_reference"]["d_noise_delay_samples"]
+    if configured is None:
+        pytest.skip("d_noise 미실측")
+    secondary = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
+    predicted = default_d_noise_delay(duct, 48_000, secondary.delay_samples)
+    assert abs(int(configured) - predicted) <= 48, (
+        f"실측 {configured} vs 기하 {predicted} — 1ms 넘게 어긋난다"
+    )
+
+
 def test_configs_explicitly_select_primary_path_policy(configs):
+    """기본 모드는 surrogate 다 — measured 는 파인튜닝이 명시적으로 켠다.
+
+    duct.yaml 에 실측 P 가 있어도 data_sim 의 기본 모드는 surrogate 로 남는다.
+    사전학습은 surrogate 로 했고, measured 전환은
+    ``--set data.digital_primary_path_mode=measured`` 로만 일어나야 한다.
+    기본값이 조용히 measured 가 되면 사전학습 재현이 깨진다.
+    """
+
     data, duct = configs
     assert data["digital_primary_path_mode"] == "secondary_surrogate"
     assert "primary_path_npz" in duct["digital_reference"]
-    assert duct["digital_reference"]["primary_path_npz"] is None
+    assert "d_noise_delay_samples" in duct["digital_reference"]
+
+
+def test_measured_primary_path_artifact_is_loadable(configs):
+    """실측 P 가 설정돼 있으면 실제로 읽히고 설정된 지연과 일치해야 한다."""
+
+    data, duct = deepcopy(configs)
+    npz = duct["digital_reference"]["primary_path_npz"]
+    if not npz:
+        pytest.skip("실측 P 미측정")
+    data["digital_primary_path_mode"] = "measured"
+    secondary = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
+    primary, total_delay = resolve_digital_primary_path(data, duct, 48_000, secondary)
+    assert primary is not None and not primary.is_surrogate
+    assert primary.delay_samples == total_delay
+    assert primary.fir.size > 0 and np.all(np.isfinite(primary.fir))
 
 
 def test_finetune_requires_measured_primary_path(configs):

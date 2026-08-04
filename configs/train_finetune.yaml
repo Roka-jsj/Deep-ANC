@@ -21,12 +21,40 @@ require_recorded_manifest: true
 # scripts/train/check_finetune.py와 train.py가 공용하는 실패-폐쇄 진입 기준.
 # 실제 official P/S와 recorded 데이터가 없으면 어떤 항목도 우회하지 않는다.
 readiness:
-  required_path_band_hz: [80, 1600]
+  # 2026-08-04 결정 — 실측이 강제한 축소이며 그 대가를 여기에 함께 적는다.
+  #
+  # 원래 값은 [80, 1600] 이었다. 실측 결과 P(z) 는 전대역에서 0.86~0.96 을 내지만
+  # S(z) 는 0.77~0.94 로 게이트 0.90 을 오간다. 약점이 80-150Hz 와 1000-1600Hz 에
+  # 집중되는데, 상쇄 스피커가 Ø40 사이드브랜치 드라이버라 그 두 끝에서 덕트와의
+  # 결합이 약한 물리적 한계다(레벨·클록·드라이버는 각각 실험으로 배제했다 —
+  # scripts/bench/sweep_probe_level.py, measure_clock_drift.py).
+  #
+  # 신뢰 대역 150-600Hz 에서는 P/S 모두 항상 0.95~0.99 다. 그리고 학습 손실
+  # (loss.nmse_objective=trusted_band)이 최적화하는 대역이 바로 이 150-600Hz 다.
+  # 즉 [80,1600] 요구는 학습이 실제로 쓰는 것보다 넓었다.
+  #
+  # **대가: 절대 목표 1(저·고역 모두 제거)의 고역은 이 단계에서 미달로 고정된다.**
+  # 이 설정으로 만든 어떤 모델도 600Hz 위를 주장하지 않는다. 고역은 상쇄 경로
+  # 개선(스피커/장착)이 선행되어야 하는 Stage-3 과제로 남긴다.
+  #
+  # 이 축소가 헐거워지지 않도록 측정 아티팩트에 consistency_band_hz 를 함께 저장하고
+  # 게이트가 "일관성을 잰 대역이 이 요구 대역을 덮는가"를 검사한다. 좁은 대역에서 잰
+  # 값으로 넓은 대역을 주장할 수 없다.
+  required_path_band_hz: [150, 600]
   min_path_consistency: 0.9
   required_recorded_ratio: 0.7
   min_recorded_sessions: 80
   min_recorded_duration_seconds: 5400   # 1.5시간; 권장 수집량은 3–4시간
   required_source_families: [speech, music, environment, machine]
+  # init checkpoint 의 lead 는 surrogate 물리로 학습할 때 쓴 잠정값이다. 실측이
+  # 끝나면 몇 샘플 달라지는 것이 정상이고(실측 109/113/116/119, 폭 10샘플),
+  # 그 차이를 흡수하는 것이 파인튜닝의 목적이다. 현재 checkpoint 109 vs 실측 113
+  # = 4샘플(83µs, 600Hz 에서 0.031 rad).
+  #
+  # 정확성은 path_delay_and_lead 가 지킨다 — 이 설정의 lead 가 실측 S+handoff−P 와
+  # 정확히 같아야 통과한다. 아래 허용치는 "어느 checkpoint 에서 출발할 수 있는가"
+  # 에만 관여하며, 과거 사고였던 lead=0 checkpoint 는 113샘플 차이라 통과 못 한다.
+  max_init_lead_mismatch_samples: 16
   require_completed_init_checkpoint: true
   max_init_best_metric_db: 0.0
   allowed_init_physics_statuses: [secondary_surrogate_representation_pretrain]
