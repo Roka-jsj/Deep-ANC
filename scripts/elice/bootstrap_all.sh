@@ -10,6 +10,17 @@
 # Azure blob 은 연결당 속도제한이 있어 반드시 pget.py(병렬 range)로 받는다.
 set -euo pipefail
 
+# --no-train: 환경·데이터·RIR·검증까지만 하고 학습은 띄우지 않는다.
+# 사전학습이 끝난 뒤 새 인스턴스에서 **파인튜닝**을 돌릴 때 쓴다. 마지막 단계가
+# 2-GPU 사전학습을 전제하므로 단일 GPU 인스턴스에서는 그대로 두면 실패한다.
+START_TRAINING=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-train) START_TRAINING=0 ;;
+    *) echo "[오류] 알 수 없는 인자: $arg" >&2; exit 2 ;;
+  esac
+done
+
 REPO=~/Deep-ANC
 cd "$REPO"
 
@@ -456,6 +467,14 @@ fi
 
 echo "=== [5/6] 검증 (pytest) ==="
 "$VENV_PYTHON" -m pytest -q
+
+if [ "$START_TRAINING" -eq 0 ]; then
+  echo "=== [6/6] 건너뜀 (--no-train) ==="
+  echo "부트스트랩 완료 — 데이터/RIR/검증까지 준비됐습니다."
+  echo "파인튜닝: scripts/train/run_finetune_pipeline.py --config configs/train_finetune.yaml \\"
+  echo "            --set data.digital_primary_path_mode=measured"
+  exit 0
+fi
 
 echo "=== [6/6] 병렬 학습 시작 (GPU0=base, GPU1=tiny) ==="
 # bootstrap 잠금 FD는 백그라운드 학습 프로세스에 상속하지 않는다.
