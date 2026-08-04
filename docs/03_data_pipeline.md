@@ -102,7 +102,7 @@ Stage-2 커리큘럼으로 한 축씩 켠다.
   --set data.digital_primary_path_mode=measured
 # 학습에 쓰지 않은 test split의 독립 반사실 평가
 .venv/bin/python scripts/eval/evaluate_recorded.py \
-  --ckpt runs/finetune_base/ckpt/best.pt --split test
+  --ckpt runs/finetune_tiny/ckpt/best.pt --split test
 ```
 
 2026-08-03 빠져 있던 pin17(REF L/R)을 재연결한 뒤 ERR/REF는 −46dBFS대, clip 0%로

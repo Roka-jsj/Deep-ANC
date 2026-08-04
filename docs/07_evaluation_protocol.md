@@ -83,7 +83,7 @@ control limit 0.10 조건의 역사적 baseline이며 현재 하드웨어에서 
 
 ```bash
 .venv/bin/python scripts/eval/evaluate_recorded.py \
-  --ckpt runs/finetune_base/ckpt/best.pt \
+  --ckpt runs/finetune_tiny/ckpt/best.pt \
   --manifest data/manifests/recorded_train.jsonl --split test
 ```
 

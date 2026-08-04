@@ -75,6 +75,33 @@ def main() -> int:
     plant = DifferentiableSecondaryPath(sp, handoff_extra_samples=handoff).to(device)
 
     state = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+
+    # 이 스크립트는 checkpoint 의 resolved 물리(P(z) resolver, digital-reference lead)를
+    # 쓰지 않는다. 그래서 corrected 규약으로 학습한 checkpoint 를 넣으면 DL 열이 조용히
+    # 틀린다 — 실측으로 tone300 이 +42.86 dB 여야 하는데 -0.91 dB(증폭)로 나온다.
+    # 원인은 두 가지가 겹친 것이다: (1) x_ref 에 lead 를 적용하지 않음, (2) 학습이 쓴
+    # P(z)=측정 S FIR(peak 0.0019) 대신 시뮬 p_err RIR(peak 0.367, 190배)을 씀.
+    #
+    # 딥러닝이 이 프로젝트의 목적이므로 FxLMS 비교기를 다시 만드는 데 시간을 쓰지 않는다.
+    # 대신 **틀린 숫자를 발행하지 못하게** 막는다. 잘못된 비교표가 한 번 나가면 되돌리기
+    # 어렵고, 이 스크립트의 결과에 걸린 결정은 현재 하나도 없다.
+    checkpoint_lead = int(state.get("cfg", {}).get("digital_reference_lead_samples", 0))
+    checkpoint_mode = str(
+        state.get("cfg", {}).get("data", {}).get("digital_primary_path_mode", "")
+    )
+    if checkpoint_lead != 0 or checkpoint_mode:
+        print(
+            "[중단] 이 checkpoint 는 digital-reference lead "
+            f"{checkpoint_lead} 샘플 / P(z) 모드 '{checkpoint_mode}' 로 학습되었습니다.\n"
+            "       compare_fxlms.py 는 두 규약을 반영하지 않아 DL 감쇠를 약 43 dB 낮게 "
+            "보고합니다(실측 +42.86 → -0.91 dB).\n"
+            "       DL 성능은 scripts/eval/evaluate_offline.py 를 쓰세요 — checkpoint 의 "
+            "resolved 설정을 그대로 사용합니다.\n"
+            "       FxLMS 실기 비교가 필요하면 scripts/demo/evaluate_fxlms_direct.py 를 쓰세요.",
+            file=sys.stderr,
+        )
+        return 2
+
     model = build_model(state["cfg"]["model"])
     model.load_state_dict(state["model"])
     model = model.eval().to(device)

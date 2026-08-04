@@ -10,7 +10,7 @@
 
   .venv/bin/python scripts/train/check_finetune.py \
     --config configs/train_finetune.yaml \
-    --completion-checkpoint runs/finetune_base/ckpt/best.pt
+    --completion-checkpoint runs/finetune_tiny/ckpt/best.pt
 
 완료 검사는 같은 checkpoint로 생성된 ``eval_recorded_{val,test}/metrics.npz``의
 SHA-256 provenance와 G4 동시 PASS까지 요구한다. 조건이 없거나 불확실하면 FAIL이다.

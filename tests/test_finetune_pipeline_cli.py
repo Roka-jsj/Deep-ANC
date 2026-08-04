@@ -76,7 +76,7 @@ def repo(tmp_path, monkeypatch):
 
 
 def _state_dir(repo_root: Path) -> Path:
-    return autostart_state_dir(repo_root / "runs" / "finetune_base")
+    return autostart_state_dir(repo_root / "runs" / "finetune_tiny")
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ def _state_dir(repo_root: Path) -> Path:
 def test_not_ready_never_creates_run_dir_and_writes_only_state_dir(repo):
     assert pipeline.main(ARGS) == EXIT_NOT_READY
 
-    assert not (repo / "runs" / "finetune_base").exists(), (
+    assert not (repo / "runs" / "finetune_tiny").exists(), (
         "NOT READY 인데 학습 디렉터리가 생겼다 — 구버전 결함이 되살아났다"
     )
     state = _state_dir(repo)
@@ -107,7 +107,7 @@ def test_not_ready_never_creates_run_dir_and_writes_only_state_dir(repo):
 def test_audit_lands_in_autostart_state_dir_not_run_dir(repo):
     pipeline.main(ARGS)
     assert (_state_dir(repo) / "audit" / "readiness.json").is_file()
-    assert not (repo / "runs" / "finetune_base" / "audit").exists()
+    assert not (repo / "runs" / "finetune_tiny" / "audit").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +230,7 @@ def test_repeated_runs_are_idempotent(repo):
     first_audit.pop("checked_at_utc", None)
     second_audit.pop("checked_at_utc", None)
     assert first_audit == second_audit
-    assert not (repo / "runs" / "finetune_base").exists()
+    assert not (repo / "runs" / "finetune_tiny").exists()
     assert not list(_state_dir(repo).rglob("*.tmp"))
 
 
@@ -240,8 +240,8 @@ def test_repeated_runs_are_idempotent(repo):
 
 
 def test_run_key_is_stable_and_path_sensitive(repo):
-    key = finetune_run_key(repo / "runs" / "finetune_base")
-    assert key == finetune_run_key("runs/finetune_base")
+    key = finetune_run_key(repo / "runs" / "finetune_tiny")
+    assert key == finetune_run_key("runs/finetune_tiny")
     assert key != finetune_run_key("runs/finetune_other")
     assert all(c.isalnum() or c in "-_" for c in key)
 

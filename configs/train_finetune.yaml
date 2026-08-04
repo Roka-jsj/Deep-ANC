@@ -3,8 +3,11 @@
 # digital-ref는 data_sim의 +109를 그대로 쓰며 배포 runtime도 109로 맞춘다.
 # 기존 lead=0/무효 objective checkpoint는 init/resume에 사용하지 않는다.
 
+# 배포 후보는 tiny 다. base 와 동일 조건(100k step, 같은 seed·데이터)으로 비교한 결과
+# held-out trusted NMSE 가 tiny 쪽이 낫고 Jetson 지연 여유도 크다. 진입점이 base 를
+# 가리키면 게이트가 열리는 순간 **배포하지 않을 모델**을 파인튜닝하게 된다.
 stage: open_loop                # 1차 파인튜닝은 open_loop, 이후 closed_loop 로 변경
-model_config: configs/model_base.yaml
+model_config: configs/model_tiny.yaml
 data_config: configs/data_sim.yaml
 duct_config: configs/duct.yaml
 
@@ -28,7 +31,7 @@ readiness:
   max_init_best_metric_db: 0.0
   allowed_init_physics_statuses: [secondary_surrogate_representation_pretrain]
 
-init_ckpt: runs/pretrain_base_corrected/ckpt/best.pt
+init_ckpt: runs/pretrain_tiny_corrected/ckpt/best.pt
 
 recorded_manifest: data/manifests/recorded_train.jsonl
 recorded_ratio: 0.7             # 실측:합성 = 7:3 혼합 배치
@@ -68,6 +71,6 @@ log_every: 100
 # Trainer의 내장 val은 합성 16개뿐이라 실측 fine-tune 종료 권한으로 쓰지 않는다.
 # 예정 step을 끝낸 뒤 독립 recorded val/test G4로 checkpoint를 판정한다.
 early_stop_patience: 0
-ckpt_dir: runs/finetune_base
+ckpt_dir: runs/finetune_tiny
 resume: null
 seed: 20260803
