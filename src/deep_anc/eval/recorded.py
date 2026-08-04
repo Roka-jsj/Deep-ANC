@@ -770,7 +770,36 @@ def write_recorded_metrics(
         raise ValueError("평가 결과와 보고서 warmup_samples가 다릅니다")
     trusted_pass = bool(trusted["mean_db"] < 0.0)
     fullband_pass = bool(fullband["mean_db"] <= 0.0)
-    g4_pass = trusted_pass and fullband_pass
+
+    # 절대 목표 2번(모든 소리 제거)은 **평균이 아니라 최악값** 문제다. 전 세그먼트 평균만
+    # 보면 machine -8 dB 와 speech +6 dB 가 섞여 평균 -1.75 dB 로 통과한다 — 즉 대화를
+    # 6 dB 증폭하는 모델이 G4 PASS 로 배포 후보가 된다. per-family 통계는 이미 계산해
+    # npz 에 넣고 있었지만(source_rows) 판정에는 한 번도 쓰이지 않았다.
+    #
+    # 두 축을 함께 본다:
+    #   - 어떤 source_family 도 평균이 증폭이면 안 된다 (mean_db < 0)
+    #   - 그 family 안의 최악 10% 구간도 증폭이면 안 된다 (worst10_mean_db < 0)
+    # 후자가 없으면 "평균은 좋은데 특정 구간에서만 시끄러운" 모델을 걸러내지 못한다.
+    source_rows = result.get("source_rows") or []
+    worst_source_trusted_db = (
+        max(float(row["trusted"]["mean_db"]) for row in source_rows)
+        if source_rows else float("nan")
+    )
+    worst_source_trusted_worst10_db = (
+        max(float(row["trusted"]["worst10_mean_db"]) for row in source_rows)
+        if source_rows else float("nan")
+    )
+    worst_source_family = (
+        max(source_rows, key=lambda row: float(row["trusted"]["mean_db"]))["source_family"]
+        if source_rows else ""
+    )
+    # source_rows 가 비어 있으면 기능 2 를 측정하지 못한 것이다 — 통과시키지 않는다.
+    source_pass = bool(
+        source_rows
+        and worst_source_trusted_db < 0.0
+        and worst_source_trusted_worst10_db < 0.0
+    )
+    g4_pass = trusted_pass and fullband_pass and source_pass
     checkpoint_sha256 = _sha256_if_file(checkpoint)
     manifest_sha256 = _sha256_if_file(manifest)
 
@@ -826,8 +855,18 @@ def write_recorded_metrics(
         f"{'PASS' if trusted_pass else 'FAIL'} |",
         f"| Fullband 평균 NMSE | ≤ 0 dB | {fullband['mean_db']:+.2f} dB | "
         f"{'PASS' if fullband_pass else 'FAIL'} |",
+        f"| **최악 source family 평균** (기능 2) | < 0 dB | "
+        f"{worst_source_trusted_db:+.2f} dB (`{worst_source_family or 'n/a'}`) | "
+        f"{'PASS' if source_rows and worst_source_trusted_db < 0.0 else 'FAIL'} |",
+        f"| **최악 source family 최악 10%** (기능 2) | < 0 dB | "
+        f"{worst_source_trusted_worst10_db:+.2f} dB | "
+        f"{'PASS' if source_rows and worst_source_trusted_worst10_db < 0.0 else 'FAIL'} |",
         "",
         f"**G4 종합: {'PASS' if g4_pass else 'FAIL'}**",
+        "",
+        "> 기능 2(모든 소리 제거)는 **평균이 아니라 최악값** 문제다. 여섯 소스 중 다섯이",
+        "> −20 dB 이고 하나가 +6 dB 이면 평균은 좋아 보이지만, 그 하나가 들리는 순간",
+        "> quiet zone 은 실패한 것이다. 그래서 평균 두 줄만으로는 G4 를 통과시키지 않는다.",
         "",
         "## Source family별 결과",
         "",
@@ -914,6 +953,16 @@ def write_recorded_metrics(
             g4_trusted_pass=np.asarray(trusted_pass, dtype=np.bool_),
             g4_fullband_pass=np.asarray(fullband_pass, dtype=np.bool_),
             g4_pass=np.asarray(g4_pass, dtype=np.bool_),
+            # 기능 2 판정을 npz 에도 남긴다 — finetune_readiness 가 이 값을 검증해야
+            # "평균만 좋은" 모델이 게이트를 통과하지 못한다.
+            g4_source_pass=np.asarray(source_pass, dtype=np.bool_),
+            g4_worst_source_trusted_mean_db=np.asarray(
+                worst_source_trusted_db, dtype=np.float64
+            ),
+            g4_worst_source_trusted_worst10_db=np.asarray(
+                worst_source_trusted_worst10_db, dtype=np.float64
+            ),
+            g4_worst_source_family=np.asarray(worst_source_family),
             nmse_trusted_mean_db=np.asarray(trusted["mean_db"]),
             nmse_trusted_median_db=np.asarray(trusted["median_db"]),
             nmse_trusted_worst10_mean_db=np.asarray(

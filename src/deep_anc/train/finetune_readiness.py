@@ -28,6 +28,31 @@ from ..data.recorded_qa import (
 DEFAULT_REQUIRED_PATH_BAND_HZ = (80.0, 1600.0)
 DEFAULT_REQUIRED_SOURCE_FAMILIES = ("speech", "music", "environment", "machine")
 
+# official P/S 를 만들 수 있는 측정 방식.
+#
+# ``ess``  — scripts/data/calibrate_wideband.py. 경로마다 따로 실행한다.
+# ``interleaved_multitone`` — scripts/data/measure_paths_interleaved.py. 두 경로를 **한 번의
+#   재생으로 동시에** 잰다. 재생(USB)과 녹음(I²S)이 다른 클록 도메인이라 두 측정이 떨어져
+#   있으면 그 사이의 wander 가 **P 와 S 의 상대 지연**에 그대로 실리는데, ANC 가 실제로
+#   요구하는 값이 바로 그 상대 지연(lead)이다. 동시 측정은 warp 를 두 경로에 공통으로
+#   실어 상대 관계에서 상쇄시킨다.
+#
+# 이 방식은 게이트를 넓히는 것이 아니라 **좁힌다**: ESS 에는 없는 아래 항목을 추가로
+# 요구하고, 무엇보다 두 파일이 같은 ``capture_id`` 를 갖는지 검사해 "같은 조건"을
+# 진폭·블록·latency 값의 우연한 일치가 아니라 **같은 캡처였다는 사실**로 확인한다.
+ALLOWED_PATH_METHODS = ("ess", "interleaved_multitone")
+INTERLEAVED_REQUIRED_FIELDS = (
+    "capture_id",
+    "interleave_guard_bins",
+    "analysis_period_seconds",
+    "tone_count",
+    "tone_snr_median_db",
+    "tone_snr_min_db",
+)
+INTERLEAVED_MAX_PERIOD_SECONDS = 2.0   # 실측 위상 잔차가 2.26s 에서 2.33rad 로 무너진다
+INTERLEAVED_MIN_TONE_COUNT = 64
+INTERLEAVED_MIN_TONE_SNR_MEDIAN_DB = 12.0
+
 
 def _repo_path(value: str | Path) -> Path:
     path = Path(value).expanduser()
@@ -115,6 +140,26 @@ def audit_official_path_model(
         delay_spread = int(_npz_scalar(data, "delay_spread_samples"))
         max_delay_jitter = int(_npz_scalar(data, "max_delay_jitter_samples"))
 
+        interleaved: dict[str, Any] = {}
+        if method == "interleaved_multitone":
+            missing_il = sorted(
+                set(INTERLEAVED_REQUIRED_FIELDS).difference(data.files)
+            )
+            if missing_il:
+                raise ValueError(
+                    "interleaved 측정 메타데이터가 없습니다: " + ", ".join(missing_il)
+                )
+            interleaved = {
+                "capture_id": str(_npz_scalar(data, "capture_id")),
+                "guard_bins": int(_npz_scalar(data, "interleave_guard_bins")),
+                "analysis_period_seconds": float(
+                    _npz_scalar(data, "analysis_period_seconds")
+                ),
+                "tone_count": int(_npz_scalar(data, "tone_count")),
+                "tone_snr_median_db": float(_npz_scalar(data, "tone_snr_median_db")),
+                "tone_snr_min_db": float(_npz_scalar(data, "tone_snr_min_db")),
+            }
+
     errors: list[str] = []
     if fir.size < 1 or not np.all(np.isfinite(fir)) or np.max(np.abs(fir)) <= 0.0:
         errors.append("FIR이 비었거나 NaN/Inf/영값입니다")
@@ -126,8 +171,32 @@ def audit_official_path_model(
         errors.append(
             f"output_channel={output_channel!r}; expected={expected_output_channel!r}"
         )
-    if method != "ess":
-        errors.append(f"method={method!r}; official method='ess'가 필요합니다")
+    if method not in ALLOWED_PATH_METHODS:
+        errors.append(
+            f"method={method!r}; 허용 method={ALLOWED_PATH_METHODS}"
+        )
+    elif method == "interleaved_multitone":
+        if interleaved["guard_bins"] != 1:
+            errors.append(
+                f"interleave_guard_bins={interleaved['guard_bins']}; 1이어야 합니다"
+            )
+        period = interleaved["analysis_period_seconds"]
+        if not math.isfinite(period) or not 0.0 < period <= INTERLEAVED_MAX_PERIOD_SECONDS:
+            errors.append(
+                f"analysis_period_seconds={period!r}; "
+                f"(0, {INTERLEAVED_MAX_PERIOD_SECONDS}] 이어야 합니다"
+            )
+        if interleaved["tone_count"] < INTERLEAVED_MIN_TONE_COUNT:
+            errors.append(
+                f"tone_count={interleaved['tone_count']} < {INTERLEAVED_MIN_TONE_COUNT}"
+            )
+        snr = interleaved["tone_snr_median_db"]
+        if not math.isfinite(snr) or snr < INTERLEAVED_MIN_TONE_SNR_MEDIAN_DB:
+            errors.append(
+                f"tone_snr_median_db={snr!r} < {INTERLEAVED_MIN_TONE_SNR_MEDIAN_DB}"
+            )
+        if not interleaved["capture_id"]:
+            errors.append("capture_id가 비었습니다")
     if repeats < 3:
         errors.append(f"ESS 반복 {repeats}회 < 3회")
     if not math.isfinite(consistency) or consistency < float(min_consistency):
@@ -161,6 +230,8 @@ def audit_official_path_model(
     return {
         "path": str(model_path),
         "sha256": sha256_file(model_path),
+        "method": method,
+        "interleaved": interleaved or None,
         "output_channel": output_channel,
         "sample_rate": artifact_rate,
         "delay_samples": delay,
@@ -454,6 +525,20 @@ def audit_finetune_readiness(cfg: dict, *, full_recorded_qa: bool = True) -> dic
             raise ValueError("유효한 official P/S가 모두 있어야 측정 조건을 비교할 수 있습니다")
         if primary["path"] == secondary["path"]:
             raise ValueError("P(z)와 S(z)가 같은 파일을 가리킵니다")
+        if primary["method"] != secondary["method"]:
+            raise ValueError(
+                f"P/S 측정 방식 불일치: P={primary['method']!r}, S={secondary['method']!r}"
+            )
+        if primary["method"] == "interleaved_multitone":
+            # 동시 측정의 근거는 값의 우연한 일치가 아니라 **같은 캡처였다는 사실**이다.
+            # capture_id 가 다르면 두 파일은 서로 다른 재생에서 나왔고, 그 사이의
+            # 클록 wander 가 상대 지연에 그대로 실린다 — lead 가 조용히 틀린다.
+            left = primary["interleaved"]["capture_id"]
+            right = secondary["interleaved"]["capture_id"]
+            if left != right:
+                raise ValueError(
+                    f"P/S capture_id 불일치: P={left!r}, S={right!r} — 동시 측정이 아닙니다"
+                )
         for key in ("amplitude", "calibration_block_size", "calibration_latency"):
             left, right = primary[key], secondary[key]
             equal = (
@@ -666,6 +751,17 @@ def _audit_g4_metrics(
         trusted_pass = bool(_npz_scalar(data, "g4_trusted_pass"))
         fullband_pass = bool(_npz_scalar(data, "g4_fullband_pass"))
         g4_pass = bool(_npz_scalar(data, "g4_pass"))
+        # 기능 2(모든 소리 제거)는 소스별 **최악값** 문제다. 이 필드가 없는 metrics.npz 는
+        # 최악 소스를 보지 않던 옛 평가기의 산출물이므로 통과시키지 않는다 — 평균만 보면
+        # 대화를 6 dB 증폭하는 모델이 PASS 한다.
+        if "g4_source_pass" not in data.files:
+            raise ValueError(
+                "G4 metrics.npz 에 g4_source_pass 가 없습니다 — 최악 source family 판정을 "
+                "하지 않는 구버전 평가기의 산출물입니다. evaluate_recorded.py 로 재평가하세요."
+            )
+        source_pass = bool(_npz_scalar(data, "g4_source_pass"))
+        worst_source_db = float(_npz_scalar(data, "g4_worst_source_trusted_mean_db"))
+        worst_source_family = str(_npz_scalar(data, "g4_worst_source_family"))
         families = {str(value) for value in np.asarray(data["source_family"]).tolist()}
         n_sessions = int(_npz_scalar(data, "n_sessions"))
         n_segments = int(_npz_scalar(data, "n_segments"))
@@ -680,10 +776,12 @@ def _audit_g4_metrics(
         errors.append("평가 checkpoint SHA-256이 완료 후보와 다릅니다")
     if saved_manifest_sha != manifest_sha256:
         errors.append("평가 manifest SHA-256이 readiness manifest와 다릅니다")
-    if not (trusted_pass and fullband_pass and g4_pass):
+    if not (trusted_pass and fullband_pass and source_pass and g4_pass):
         errors.append(
-            "G4 trusted/fullband 동시 판정을 통과하지 못했습니다: "
-            f"trusted={trusted_pass}, fullband={fullband_pass}, g4={g4_pass}"
+            "G4 판정을 통과하지 못했습니다: "
+            f"trusted={trusted_pass}, fullband={fullband_pass}, "
+            f"source(기능2 최악값)={source_pass} "
+            f"[최악 {worst_source_family or 'n/a'} {worst_source_db:+.2f} dB], g4={g4_pass}"
         )
     missing_families = sorted(set(required_source_families).difference(families))
     if missing_families:

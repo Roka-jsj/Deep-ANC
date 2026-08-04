@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 import torch
 
@@ -30,9 +31,26 @@ def _official_path(
     delay: int,
     consistency: float = 0.97,
     amplitude: float = 0.005,
+    method: str = "ess",
+    interleaved: dict | None = None,
 ) -> None:
+    extra: dict = {}
+    if method == "interleaved_multitone":
+        defaults = {
+            "capture_id": np.asarray("cap-1"),
+            "interleave_guard_bins": np.asarray(1, dtype=np.int64),
+            "analysis_period_seconds": np.asarray(1.0),
+            "tone_count": np.asarray(771, dtype=np.int64),
+            "tone_snr_median_db": np.asarray(24.0),
+            "tone_snr_min_db": np.asarray(14.0),
+        }
+        defaults.update(
+            {key: np.asarray(value) for key, value in (interleaved or {}).items()}
+        )
+        extra = defaults
     np.savez(
         path,
+        **extra,
         fir=np.asarray([0.5, -0.1, 0.02], dtype=np.float32),
         delay_samples=np.asarray(delay, dtype=np.int64),
         sample_rate=np.asarray(FS, dtype=np.int64),
@@ -42,7 +60,7 @@ def _official_path(
         calibration_block_size=np.asarray(256, dtype=np.int64),
         calibration_latency=np.asarray("high"),
         output_channel=np.asarray(channel),
-        method=np.asarray("ess"),
+        method=np.asarray(method),
         repeats=np.asarray(3, dtype=np.int64),
         amplitude=np.asarray(amplitude),
         xrun_count=np.asarray(0, dtype=np.int64),
@@ -179,22 +197,40 @@ def _ready_config(tmp_path: Path) -> dict:
     }
 
 
-def _g4_metrics(path: Path, *, split: str, checkpoint: Path, manifest: Path) -> None:
+def _g4_metrics(
+    path: Path,
+    *,
+    split: str,
+    checkpoint: Path,
+    manifest: Path,
+    source_pass: bool = True,
+    worst_source_db: float = -4.0,
+    include_source_fields: bool = True,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        path,
-        split=np.asarray(split),
-        physics_status=np.asarray("measured_primary_path"),
-        allow_surrogate=np.asarray(False),
-        checkpoint_sha256=np.asarray(sha256_file(checkpoint)),
-        manifest_sha256=np.asarray(sha256_file(manifest)),
-        g4_trusted_pass=np.asarray(True),
-        g4_fullband_pass=np.asarray(True),
-        g4_pass=np.asarray(True),
-        source_family=np.asarray(FAMILIES),
-        n_sessions=np.asarray(4, dtype=np.int64),
-        n_segments=np.asarray(16, dtype=np.int64),
-    )
+    payload = {
+        "split": np.asarray(split),
+        "physics_status": np.asarray("measured_primary_path"),
+        "allow_surrogate": np.asarray(False),
+        "checkpoint_sha256": np.asarray(sha256_file(checkpoint)),
+        "manifest_sha256": np.asarray(sha256_file(manifest)),
+        "g4_trusted_pass": np.asarray(True),
+        "g4_fullband_pass": np.asarray(True),
+        "g4_pass": np.asarray(bool(source_pass)),
+        "source_family": np.asarray(FAMILIES),
+        "n_sessions": np.asarray(4, dtype=np.int64),
+        "n_segments": np.asarray(16, dtype=np.int64),
+    }
+    if include_source_fields:
+        # 기능 2(모든 소리 제거)는 소스별 최악값 판정이다 — 평균만 담은 옛 형식은
+        # 게이트가 거부해야 한다(include_source_fields=False 로 그 회귀를 검사한다).
+        payload.update(
+            g4_source_pass=np.asarray(bool(source_pass)),
+            g4_worst_source_trusted_mean_db=np.asarray(float(worst_source_db)),
+            g4_worst_source_trusted_worst10_db=np.asarray(float(worst_source_db) + 1.0),
+            g4_worst_source_family=np.asarray("speech"),
+        )
+    np.savez_compressed(path, **payload)
 
 
 def test_official_path_gate_rejects_wrong_channel_and_low_consistency(tmp_path):
@@ -309,3 +345,195 @@ def test_completion_requires_same_checkpoint_and_manifest_sha_for_val_and_test(t
     assert "SHA-256" in next(
         item for item in failed["checks"] if item["id"] == "recorded_test_g4"
     )["message"]
+
+
+def _completion_setup(tmp_path):
+    """완료 감사에 필요한 최소 구성. 위 테스트와 같은 뼈대를 재사용한다."""
+
+    cfg = _ready_config(tmp_path)
+    run = Path(cfg["ckpt_dir"])
+    best = run / "ckpt" / "best.pt"
+    saved_cfg = {
+        **cfg,
+        "physics_status": "measured_primary_path",
+        "digital_reference_lead_samples": 3,
+    }
+    _checkpoint(best, cfg=saved_cfg, step=4)
+    _checkpoint(best.parent / "last.pt", cfg=saved_cfg, step=6)
+    return cfg, best, Path(cfg["recorded_manifest"]), run
+
+
+def test_g4_rejects_model_that_amplifies_one_source_family(tmp_path):
+    """기능 2 회귀 방어 — 평균이 좋아도 **최악 소스**가 증폭이면 완료가 아니다.
+
+    이 게이트가 없으면 machine −8 dB / speech +6 dB 가 섞여 평균 −1.75 dB 로 통과한다.
+    즉 대화를 6 dB 키우는 모델이 `[COMPLETE] G4 PASS` 로 배포 후보가 된다.
+    """
+
+    cfg, best, manifest, run = _completion_setup(tmp_path)
+    val_metrics = run / "eval_recorded_val" / "metrics.npz"
+    test_metrics = run / "eval_recorded_test" / "metrics.npz"
+    _g4_metrics(val_metrics, split="val", checkpoint=best, manifest=manifest)
+    # test 쪽만 최악 소스가 증폭(+6 dB)인 상황
+    _g4_metrics(
+        test_metrics, split="test", checkpoint=best, manifest=manifest,
+        source_pass=False, worst_source_db=6.0,
+    )
+
+    result = audit_finetune_completion(
+        cfg, checkpoint=best, val_metrics=val_metrics, test_metrics=test_metrics
+    )
+    assert not result["ok"]
+    assert not result["fine_tuning_complete"]
+    message = next(
+        item for item in result["checks"] if item["id"] == "recorded_test_g4"
+    )["message"]
+    assert "기능2" in message and "speech" in message and "+6.00" in message
+
+
+def test_g4_rejects_metrics_without_worst_source_fields(tmp_path):
+    """최악 소스를 판정하지 않던 **구버전 평가기의 산출물**은 통과시키지 않는다.
+
+    필드가 없으면 조용히 통과시키는 것이 가장 위험하다 — 게이트가 있다고 믿으면서
+    실제로는 평균만 보게 된다.
+    """
+
+    cfg, best, manifest, run = _completion_setup(tmp_path)
+    val_metrics = run / "eval_recorded_val" / "metrics.npz"
+    test_metrics = run / "eval_recorded_test" / "metrics.npz"
+    _g4_metrics(val_metrics, split="val", checkpoint=best, manifest=manifest)
+    _g4_metrics(
+        test_metrics, split="test", checkpoint=best, manifest=manifest,
+        include_source_fields=False,
+    )
+
+    result = audit_finetune_completion(
+        cfg, checkpoint=best, val_metrics=val_metrics, test_metrics=test_metrics
+    )
+    assert not result["ok"]
+    assert "g4_source_pass" in next(
+        item for item in result["checks"] if item["id"] == "recorded_test_g4"
+    )["message"]
+
+
+# ---------------------------------------------------------------------------
+# interleaved_multitone — P/S 동시 측정 방식
+#
+# 이 방식을 허용하는 것은 게이트를 넓히는 것이 아니다. ESS 가 요구하지 않는 항목
+# (guard=1, 분석창 길이, 톤 수, 톤 SNR)을 추가로 요구하고, 무엇보다 두 파일이 같은
+# capture 에서 나왔는지를 **파일에 박힌 capture_id 로** 확인한다. 진폭·블록·latency 가
+# 우연히 같은 서로 다른 두 측정은 여기서 걸린다.
+# ---------------------------------------------------------------------------
+
+
+def _check(report: dict, name: str) -> dict:
+    return next(item for item in report["checks"] if item["id"] == name)
+
+
+def test_interleaved_method_is_accepted_with_full_metadata(tmp_path):
+    path = tmp_path / "primary.npz"
+    _official_path(path, channel="noise", delay=4, method="interleaved_multitone")
+    report = audit_official_path_model(
+        path, expected_output_channel="noise", sample_rate=FS,
+        required_band_hz=(100.0, 1_000.0),
+    )
+    assert report["method"] == "interleaved_multitone"
+    assert report["interleaved"]["capture_id"] == "cap-1"
+
+
+def test_interleaved_without_extra_metadata_is_rejected(tmp_path):
+    path = tmp_path / "primary.npz"
+    _official_path(path, channel="noise", delay=4)  # ess 필드만
+    with np.load(path) as data:
+        arrays = {key: data[key] for key in data.files}
+    arrays["method"] = np.asarray("interleaved_multitone")
+    np.savez(path, **arrays)
+    with pytest.raises(ValueError, match="interleaved 측정 메타데이터가 없습니다"):
+        audit_official_path_model(
+            path, expected_output_channel="noise", sample_rate=FS,
+            required_band_hz=(100.0, 1_000.0),
+        )
+
+
+@pytest.mark.parametrize(
+    "override, pattern",
+    [
+        ({"interleave_guard_bins": 2}, "interleave_guard_bins"),
+        ({"analysis_period_seconds": 3.7}, "analysis_period_seconds"),
+        ({"tone_count": 32}, "tone_count"),
+        ({"tone_snr_median_db": 6.0}, "tone_snr_median_db"),
+        ({"capture_id": ""}, "capture_id"),
+    ],
+)
+def test_interleaved_quality_fields_are_enforced(tmp_path, override, pattern):
+    path = tmp_path / "primary.npz"
+    _official_path(
+        path, channel="noise", delay=4,
+        method="interleaved_multitone", interleaved=override,
+    )
+    with pytest.raises(ValueError, match=pattern):
+        audit_official_path_model(
+            path, expected_output_channel="noise", sample_rate=FS,
+            required_band_hz=(100.0, 1_000.0),
+        )
+
+
+def test_unknown_method_is_still_rejected(tmp_path):
+    path = tmp_path / "primary.npz"
+    _official_path(path, channel="noise", delay=4, method="white_noise")
+    with pytest.raises(ValueError, match="허용 method"):
+        audit_official_path_model(
+            path, expected_output_channel="noise", sample_rate=FS,
+            required_band_hz=(100.0, 1_000.0),
+        )
+
+
+def test_interleaved_pair_from_different_captures_fails_matched_conditions(tmp_path):
+    """조건 값이 전부 같아도 **다른 capture** 면 통과하면 안 된다.
+
+    다른 재생에서 나왔다면 그 사이의 클록 wander 가 두 경로의 상대 지연에 실린다.
+    lead = S_delay + handoff − P_delay 가 바로 그 값이므로, 이걸 놓치면 파인튜닝이
+    틀린 lead 로 조용히 진행된다.
+    """
+
+    cfg = _ready_config(tmp_path)
+    primary = Path(cfg["duct"]["digital_reference"]["primary_path_npz"])
+    secondary = Path(cfg["duct"]["secondary_path"]["npz"])
+    primary.unlink()
+    secondary.unlink()
+    _official_path(
+        primary, channel="noise", delay=4, method="interleaved_multitone",
+        interleaved={"capture_id": "cap-A"},
+    )
+    _official_path(
+        secondary, channel="cancel", delay=5, method="interleaved_multitone",
+        interleaved={"capture_id": "cap-B"},
+    )
+    report = audit_finetune_readiness(cfg, full_recorded_qa=False)
+    matched = _check(report, "matched_path_measurement_conditions")
+    assert not matched["ok"]
+    assert "capture_id 불일치" in matched["message"]
+
+
+def test_interleaved_pair_from_one_capture_passes_matched_conditions(tmp_path):
+    cfg = _ready_config(tmp_path)
+    primary = Path(cfg["duct"]["digital_reference"]["primary_path_npz"])
+    secondary = Path(cfg["duct"]["secondary_path"]["npz"])
+    primary.unlink()
+    secondary.unlink()
+    _official_path(primary, channel="noise", delay=4, method="interleaved_multitone")
+    _official_path(secondary, channel="cancel", delay=5, method="interleaved_multitone")
+    report = audit_finetune_readiness(cfg, full_recorded_qa=False)
+    matched = _check(report, "matched_path_measurement_conditions")
+    assert matched["ok"], matched["message"]
+
+
+def test_mixed_methods_are_rejected(tmp_path):
+    cfg = _ready_config(tmp_path)
+    secondary = Path(cfg["duct"]["secondary_path"]["npz"])
+    secondary.unlink()
+    _official_path(secondary, channel="cancel", delay=5, method="interleaved_multitone")
+    report = audit_finetune_readiness(cfg, full_recorded_qa=False)
+    matched = _check(report, "matched_path_measurement_conditions")
+    assert not matched["ok"]
+    assert "측정 방식 불일치" in matched["message"]
