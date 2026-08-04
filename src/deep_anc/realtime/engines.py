@@ -131,12 +131,23 @@ class TrtEngine:
 
         try:
             import tensorrt as trt
-            from cuda import cudart
         except ImportError as exc:
             raise RuntimeError(
-                "tensorrt/cuda-python 바인딩이 없습니다. docs/06_deployment_jetson.md 의 "
-                "TensorRT 설치 절을 참조하세요 (시스템 변경이 필요해 기본 미설치)."
+                "tensorrt 파이썬 바인딩이 없습니다. docs/06_deployment_jetson.md 의 "
+                "TensorRT 설치 절을 참조하세요."
             ) from exc
+        # cuda-python 12 부터 cudart 가 cuda.bindings.runtime 으로 옮겨졌다. 두 배치를
+        # 모두 받아준다 — Jetson 이미지마다 버전이 달라 한쪽만 지원하면 배포가 막힌다.
+        try:
+            from cuda.bindings import runtime as cudart
+        except ImportError:
+            try:
+                from cuda import cudart
+            except ImportError as exc:
+                raise RuntimeError(
+                    "cuda-python 바인딩이 없습니다 (cuda.bindings.runtime / cuda.cudart "
+                    "둘 다 없음). docs/06_deployment_jetson.md 참조."
+                ) from exc
 
         self.hop = int(hop)
         self._trt = trt

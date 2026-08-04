@@ -11,6 +11,8 @@ sounddevice>=0.4.6
 onnx>=1.15
 # 1.19+ 는 Tegra(aarch64)에서 cpuinfo 크래시 (세션 생성 시 abort) — 1.18.1 로 고정
 onnxruntime==1.18.1
-cuda-python>=12.0
+# CUDA 13용 cuda-python 은 JetPack 6(CUDA 12.6) 드라이버에서 cudaErrorInsufficientDriver
+# 로 실패한다. 드라이버 major 에 맞춰 12.x 로 묶는다.
+cuda-python>=12.0,<13
 tensorboard>=2.15
 pytest>=7.4
