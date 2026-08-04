@@ -9,10 +9,11 @@
 |---|---|---|
 | I/O 왕복지연 (block 256/low) | **30.6ms** (1470샘플) | calibration_4s.log 상호상관 피크 |
 | I/O 왕복지연 (block 512/high) | 57.1ms | calibration_4s_512.log |
-| 채택 S(z) 순수지연 | **1342샘플 = 27.96ms** | secondary_path_4s.npz (fit 2.14dB, coherence 0.40) |
-| S(z) 보정 유효대역 | **150–600Hz** | 동 npz excitation_band — 밖은 잡음 피팅 |
+| 채택 S(z) 순수지연 | **1465샘플 = 30.52ms** | secondary_path_il.npz (일관성 0.956) |
+| 채택 P(z) 순수지연 | **1608샘플 = 33.50ms** | primary_path_il.npz (일관성 0.973), 같은 capture |
+| S/P 신뢰 대역 | **150–600Hz** | 동 npz consistency_band — 구동은 64–1648Hz 지만 재현은 이 구간뿐 |
 | 3-스레드 런타임 핸드오프 | **+256샘플 = 5.33ms** | 콜백→추론→다음 콜백 1 hop (설계 C1) |
-| digital `D_noise` | **1489샘플 = 31.02ms (현재 추정)** | S 지연에서 CS→ERR를 빼고 NS→ERR를 더한 값 |
+| digital `D_noise` | **1608샘플 = 33.50ms (실측)** | primary_path_il.npz. 기하 예측 1612 와 4샘플 차 |
 
 주의: S(z) 지연 27.96ms 의 대부분은 **USB/ALSA 버퍼 지연**이다 (덕트 내 음향 전파는
 CS→ERR 50mm = 0.15ms 에 불과).

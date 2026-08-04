@@ -29,10 +29,6 @@ def drive_np(x: np.ndarray, gain: float) -> np.ndarray:
     return (np.tanh(g * np.asarray(x, dtype=np.float64)) / g).astype(np.float32)
 
 
-def hardclip_np(x: np.ndarray, limit: float) -> np.ndarray:
-    return np.clip(np.asarray(x, dtype=np.float32), -limit, limit)
-
-
 if torch is not None:
 
     def sef_torch(x: "torch.Tensor", eta: "torch.Tensor | float") -> "torch.Tensor":

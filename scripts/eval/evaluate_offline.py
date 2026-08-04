@@ -95,7 +95,7 @@ def main() -> int:
             f"S(z) sample_rate={sp.sample_rate}Hz != data sample_rate={fs}Hz"
         )
     trusted = intersect_frequency_bands(
-        sp.excitation_band_hz,
+        sp.trusted_band_hz(),
         duct_cfg["acoustics"]["realistic_target_band_hz"],
         fs / 2.0,
     )
@@ -172,7 +172,7 @@ def main() -> int:
         "",
         f"- 테스트 아이템: {len(per_item_fullband)}개 (reference_mode={data_cfg.get('reference_mode')})",
         f"- Trusted 대역: **{trusted[0]:.0f}–{trusted[1]:.0f} Hz** "
-        f"(S(z) {sp.excitation_band_hz[0]:.0f}–{sp.excitation_band_hz[1]:.0f} Hz ∩ "
+        f"(S(z) {sp.trusted_band_hz()[0]:.0f}–{sp.trusted_band_hz()[1]:.0f} Hz ∩ "
         f"덕트 목표 {duct_cfg['acoustics']['realistic_target_band_hz'][0]:.0f}–"
         f"{duct_cfg['acoustics']['realistic_target_band_hz'][1]:.0f} Hz)",
         f"- **Trusted 평균 NMSE: {overall_trusted:.2f} dB** (감쇠 {-overall_trusted:.2f} dB)",

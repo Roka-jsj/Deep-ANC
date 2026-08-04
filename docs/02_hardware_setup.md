@@ -117,13 +117,22 @@ probe는 raw code 다양성, float 변환 RMS, peak, clipping을 함께 검사�
 
 ### 현재 자산 (assets/measured/)
 
-| 파일 | delay | fit | coherence | 대역 | 비고 |
+| 파일 | delay | 일관성 (150–600Hz) | 전대역 | 방식 | 비고 |
 |---|---|---|---|---|---|
-| `secondary_path_4s.npz` | 1342 (27.96ms) | 2.14dB | 0.40 | 150–600Hz | **채택본** (block 256/low 측정) |
-| `secondary_path_legacy_512high.npz` | 2613 (54.4ms) | 1.09dB | 0.27 | 150–600Hz | 구버전 기록용 (block 512/high) |
+| `primary_path_il.npz` | 1608 | **0.973** | 0.920 | interleaved | **채택 P(z)** |
+| `secondary_path_il.npz` | 1465 | **0.956** | 0.781 | interleaved | **채택 S(z)** — P 와 같은 capture |
+| `secondary_path_4s.npz` | 1342 | 0.40 | — | 순차 ESS | 폐기 (2026-08-05) |
+| `secondary_path_legacy_512high.npz` | 2613 | 0.27 | — | 순차 ESS | 구버전 기록용 (block 512/high) |
+
+채택본 두 개는 **한 번의 재생으로 동시에** 측정했고 `capture_id` 가 일치한다. 순차 ESS 는
+두 측정 사이의 클록 wander 가 P/S 상대 지연에 실려 lead 를 틀리게 만든다.
+
+`excitation_band_hz`(구동 64–1648Hz)와 `consistency_band_hz`(검증 150–600Hz)는 다른 값이다.
+학습 손실과 평가는 **검증 대역**을 쓴다 — 재현되지 않는 대역까지 최적화하면 그 잘못된 위상이
+gradient 를 지배해 신뢰 구간 성능까지 잃는다.
 
 주의: 기존 anc_project 는 512/high 로 측정된 모델을 256/low 런타임에 쓰고 있었다
-(지연 26ms 어긋남 — appendix 참조). 본 저장소는 **256/low 측정본(4s)** 을 채택했다.
+(지연 26ms 어긋남 — appendix 참조). 측정 latency 는 런타임과 반드시 같아야 한다.
 
 ### 광대역 재보정 (풀밴드 학습의 선행 게이트)
 

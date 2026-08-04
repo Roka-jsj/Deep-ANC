@@ -203,7 +203,7 @@ class Trainer:
         cutoff = float(acoustics.get("plane_wave_cutoff_hz", 1633.0))
         target_band = tuple(acoustics.get("realistic_target_band_hz", [80.0, 1000.0]))
         self.trusted_band_hz = intersect_frequency_bands(
-            tuple(sp.excitation_band_hz),
+            tuple(sp.trusted_band_hz()),
             target_band,
             self.fs / 2.0,
         )
@@ -211,7 +211,7 @@ class Trainer:
             print(
                 "[trainer] NMSE trusted band: "
                 f"{self.trusted_band_hz[0]:.0f}–{self.trusted_band_hz[1]:.0f}Hz "
-                f"(S 실측 {sp.excitation_band_hz[0]:.0f}–{sp.excitation_band_hz[1]:.0f}Hz "
+                f"(S 신뢰 {sp.trusted_band_hz()[0]:.0f}–{sp.trusted_band_hz()[1]:.0f}Hz "
                 f"∩ 목표 {target_band[0]:.0f}–{target_band[1]:.0f}Hz)"
             )
             print(f"[trainer] physics status: {self.physics_status}")

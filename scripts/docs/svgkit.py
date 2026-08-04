@@ -102,6 +102,31 @@ class Canvas:
             f'stroke-linejoin="round"{dd}{marker}/>'
         )
 
+    def polygon(
+        self, points: list[tuple[float, float]], *,
+        fill: str = PANEL, stroke: str = INK, width: float = 1.6,
+        opacity: float = 1.0, dash: str | None = None,
+    ) -> None:
+        coords = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+        d = f' stroke-dasharray="{dash}"' if dash else ""
+        self.parts.append(
+            f'<polygon points="{coords}" fill="{fill}" fill-opacity="{opacity}" '
+            f'stroke="{stroke}" stroke-width="{width}" stroke-linejoin="round"{d}/>'
+        )
+
+    def ellipse(
+        self, cx: float, cy: float, rx: float, ry: float, *,
+        fill: str = "#ffffff", stroke: str = INK, width: float = 1.6,
+        rotate: float = 0.0,
+    ) -> None:
+        transform = (
+            f' transform="rotate({rotate:.1f} {cx:.1f} {cy:.1f})"' if rotate else ""
+        )
+        self.parts.append(
+            f'<ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{rx:.1f}" ry="{ry:.1f}" '
+            f'fill="{fill}" stroke="{stroke}" stroke-width="{width}"{transform}/>'
+        )
+
     def circle(self, cx: float, cy: float, r: float, *,
                fill: str = "#ffffff", stroke: str = INK, width: float = 1.6) -> None:
         self.parts.append(

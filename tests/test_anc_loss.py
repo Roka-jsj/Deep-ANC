@@ -46,11 +46,12 @@ def _loss_cfg(objective: str | None = None) -> dict:
 
 
 def test_measured_and_target_band_intersection() -> None:
-    sp = load_secondary_path(REPO_ROOT / "assets/measured/secondary_path_4s.npz")
     duct = load_yaml(REPO_ROOT / "configs/duct.yaml")
+    sp = load_secondary_path(REPO_ROOT / duct["secondary_path"]["npz"])
     target = tuple(duct["acoustics"]["realistic_target_band_hz"])
 
-    trusted = intersect_frequency_bands(sp.excitation_band_hz, target, 24_000.0)
+    # 구동 대역이 아니라 **재현이 검증된 대역**으로 교집합을 낸다.
+    trusted = intersect_frequency_bands(sp.trusted_band_hz(), target, 24_000.0)
     assert trusted == (150.0, 600.0)
 
 

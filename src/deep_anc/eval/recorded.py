@@ -214,7 +214,7 @@ def load_recorded_eval_context(
         "realistic_target_band_hz", [80.0, 1000.0]
     )
     computed_trusted = intersect_frequency_bands(
-        secondary.excitation_band_hz, target_band, fs / 2.0
+        secondary.trusted_band_hz(), target_band, fs / 2.0
     )
     saved_trusted_raw = cfg["trusted_band_hz"]
     saved_trusted = intersect_frequency_bands(

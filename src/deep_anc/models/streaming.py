@@ -8,7 +8,6 @@ ONNX export 규약 (docs/06_deployment_jetson.md):
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 from torch import nn
 
@@ -55,26 +54,6 @@ def state_names(model: HybridANCNet) -> list[str]:
             names.append(f"st_{i}_tcn")
     names.append("st_dec")
     return names
-
-
-class StreamingHybridANC:
-    """PyTorch eager 스트리밍 실행기 (개발/torch 엔진용)."""
-
-    def __init__(self, model: HybridANCNet, device: str = "cpu") -> None:
-        self.model = model.to(device).eval()
-        self.device = torch.device(device)
-        self.reset()
-
-    def reset(self) -> None:
-        self.states = self.model.init_states(batch=1, device=self.device)
-
-    @torch.no_grad()
-    def step(self, block: np.ndarray) -> np.ndarray:
-        """block: [in_ch, N] float32 → y [N] float32."""
-        x = torch.from_numpy(np.ascontiguousarray(block, dtype=np.float32))
-        x = x.unsqueeze(0).to(self.device)
-        y, self.states = self.model.streaming_step(x, self.states)
-        return y.squeeze(0).squeeze(0).cpu().numpy()
 
 
 class ExportWrapper(nn.Module):

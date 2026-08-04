@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     ).to(device)
     primary, _total = resolve_digital_primary_path(data_cfg, duct_cfg, fs, sp)
     trusted = intersect_frequency_bands(
-        sp.excitation_band_hz, duct_cfg["acoustics"]["realistic_target_band_hz"], fs / 2.0
+        sp.trusted_band_hz(), duct_cfg["acoustics"]["realistic_target_band_hz"], fs / 2.0
     )
     bands = eval_cfg.get("octave_bands_hz", [125, 250, 500, 1000, 2000, 4000, 8000])
 

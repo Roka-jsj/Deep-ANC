@@ -173,7 +173,7 @@ def main() -> int:
             f"S(z) sample_rate={sp.sample_rate}Hz != runtime sample_rate={fs_config}Hz"
         )
     trusted = intersect_frequency_bands(
-        sp.excitation_band_hz,
+        sp.trusted_band_hz(),
         initial_cfg["duct"]["acoustics"]["realistic_target_band_hz"],
         fs_config / 2.0,
     )

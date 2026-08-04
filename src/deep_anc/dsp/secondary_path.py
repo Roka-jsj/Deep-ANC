@@ -31,6 +31,21 @@ class SecondaryPathData:
     coherence_median: float
     excitation_band_hz: tuple[float, float]
     source_path: str
+    consistency_band_hz: tuple[float, float] | None = None
+    """반복 일관성(coherence_median)을 **실제로 측정한** 대역.
+
+    ``excitation_band_hz`` 와 구분해야 한다. 전자는 "톤을 쏜 곳"이고 이건 "재현이
+    검증된 곳"이다. 2026-08-05 실측이 이 구분을 강제했다 — 동시 인터리브 측정은
+    64-1648Hz 를 구동하지만 반복 일관성이 0.90 을 넘는 구간은 150-600Hz 뿐이다
+    (그 밖은 0.74~0.84). 구동 대역을 신뢰 대역으로 오해하면 손실이 재현되지 않는
+    대역까지 최적화하고, 그 잘못된 위상이 gradient 를 지배해 **신뢰 구간의 성능까지**
+    잃는다(docs/README §3.3 의 실패 모드).
+    """
+
+    def trusted_band_hz(self) -> tuple[float, float]:
+        """이 모델을 신뢰할 수 있는 대역. 검증된 대역이 있으면 그쪽이 우선이다."""
+
+        return self.consistency_band_hz or self.excitation_band_hz
 
 
 def _npz_scalar(data: Any, key: str, default: Any) -> Any:
@@ -58,6 +73,11 @@ def load_secondary_path(path: str | Path) -> SecondaryPathData:
         coh = float(_npz_scalar(data, "coherence_median", float("nan")))
         band = data["excitation_band_hz"] if "excitation_band_hz" in data else np.array([0.0, 0.0])
         band = tuple(float(v) for v in np.asarray(band).reshape(-1)[:2])
+        consistency_band: tuple[float, float] | None = None
+        if "consistency_band_hz" in data:
+            values = np.asarray(data["consistency_band_hz"]).reshape(-1)[:2]
+            if values.size == 2 and np.all(np.isfinite(values)):
+                consistency_band = (float(values[0]), float(values[1]))
 
     if fir.size < 1 or not np.all(np.isfinite(fir)) or float(np.max(np.abs(fir))) <= 0.0:
         raise ValueError(f"잘못된 2차경로 FIR: {p}")
@@ -71,6 +91,7 @@ def load_secondary_path(path: str | Path) -> SecondaryPathData:
         coherence_median=coh,
         excitation_band_hz=band,
         source_path=str(p),
+        consistency_band_hz=consistency_band,
     )
 
 
