@@ -1,0 +1,42 @@
+# HybridANCNet-tiny-wide — **GPU 형상** 실험 변형.
+#
+# 지금까지 구조 탐색은 깊이(dilations)·수용영역·attention 만 바꿨다. 폭만 키운 변형은
+# 시험한 적이 없는데, GPU 가 원하는 것은 정확히 폭이다.
+#
+#   깊이 ↑ → 순차 커널 런치 ↑ → GPU 에 **불리** (런치 지연이 누적)
+#   폭   ↑ → 레이어당 병렬 작업 ↑ → GPU 에 **유리** (놀던 코어가 채워짐)
+#
+# tiny 는 레이어당 병렬 작업이 약 512 개인데 Orin 은 CUDA 코어가 2048 개다. 즉 커널
+# 하나가 GPU 를 거의 안 쓰면서 런치 지연은 전부 낸다. 폭을 4배로 하면 병렬 작업이
+# 2048 개가 되어 코어를 실제로 채운다.
+#
+# 근거가 되는 실측: base 는 tiny 대비 연산량 5.2배인데 GPU 시간은 2.4배였다
+# (0.56 → 1.33ms). 사블리니어라는 것이 곧 GPU 가 놀고 있었다는 뜻이다.
+#
+# **깊이는 tiny 와 동일하게 유지한다** — 순차 런치 수를 늘리지 않는 것이 요점이다.
+
+name: hybrid_anc_tiny_wide
+hop: 128
+win: 384
+in_channels: 2
+io_scale: 0.02
+
+encoder:
+  channels: 512                 # tiny 128 → 4배
+
+tcn:
+  repeats: 2                    # tiny 와 동일 — 깊이는 건드리지 않는다
+  dilations: [1, 2, 4, 8]       # tiny 와 동일 (8 블록, 수용영역 168ms)
+  hidden: 1024                  # tiny 256 → 4배
+  kernel: 3
+
+glstm:
+  groups: 2                     # 폭이 커지면 순환 비용이 제곱으로 늘어 그룹으로 나눈다
+  hidden_per_group: 384
+  insert_after_repeat: 2
+
+attention:
+  enabled: false                # 측정에서 실격한 요소는 넣지 않는다
+
+limiter:
+  limit: 0.2
