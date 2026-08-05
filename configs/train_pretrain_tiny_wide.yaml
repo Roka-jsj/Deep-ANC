@@ -1,0 +1,57 @@
+# tiny_wide 사전학습 — **용량 가설 검증**.
+#
+# tiny 파인튜닝(50k)에서 학습 NMSE 가 step 10,000 이후 −2 dB 에서 정체했다. train 과
+# val 의 격차가 2 dB 뿐이라 과적합(데이터 부족)이 아니라 **미적합(용량 부족)** 신호다.
+# docs/12 §5.2 의 판별표가 이 경우 tiny_wide 를 지시한다.
+#
+# tiny 와 **깊이는 같고 폭만 4배**다(블록 8개 유지, C 128→512). GPU 는 폭에 거의 공짜지만
+# 깊이에는 비싸다 — MAXN 실측 P50: tiny 0.29ms / tiny_wide 0.61ms / base(블록 15) 0.72ms.
+#
+# 다른 하이퍼파라미터는 train_pretrain.yaml 그대로 둔다. 바꾸면 tiny 와의 비교가 깨진다.
+
+# Stage-1 사전학습 (open-loop, 시뮬레이션 데이터) — Elice A100 기준
+# 실행: .venv/bin/python scripts/train/train.py --config configs/train_pretrain.yaml
+# DDP:  .venv/bin/torchrun --nproc_per_node=2 scripts/train/train.py --config configs/train_pretrain.yaml
+
+stage: open_loop                # open_loop | closed_loop
+model_config: configs/model_tiny_wide.yaml
+data_config: configs/data_sim.yaml
+duct_config: configs/duct.yaml
+
+batch_size: 96                  # A100 80GB — base 와 같은 sample budget 유지(비교 가능성)
+num_workers: 14                # 2모델 동시 실행 시 32 vCPU 중 모델별 14개
+prefetch_factor: 4
+
+optimizer:
+  name: adamw
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+schedule:
+  warmup_steps: 1250           # 96×1250 = 기존 24×5000 warmup sample 수
+  total_steps: 100000          # 96×100k = 기존 24×400k 총 sample 수
+  min_lr: 1.0e-5
+
+amp: bf16
+grad_clip: 5.0
+
+loss:
+  # 실측 S(z) 유효대역 ∩ duct 목표대역(현재 150–600Hz) NMSE를 최소화.
+  # fullband NMSE는 do-no-harm 관측 지표로 별도 기록한다.
+  nmse_objective: trusted_band
+  mrstft_ffts: [256, 512, 1024, 2048]
+  lambda_mrstft: 1.0
+  lambda_pow: 1.0e-3
+  lambda_clip: 1.0
+  clip_margin: 0.18
+  # 커리큘럼 A: duct.yaml 목표대역(80–800Hz) ×3 가중. [교차검증 C3]
+  # 커리큘럼 B(풀밴드 균일)는 광대역 S(z) 재보정(coherence≥0.6) 통과 후에만 사용.
+  band_weight: curriculum_a     # curriculum_a | fullband
+
+eval_every: 500                # 96×500 = 기존 24×2000 eval 간격
+log_every: 100
+early_stop_patience: 0          # 고정 val 16개가 약하므로 corrected pretrain은 완주
+ckpt_dir: runs/pretrain_tiny_wide
+resume: null                    # 재개 시 ckpt 경로
+seed: 20260802
