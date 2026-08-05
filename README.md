@@ -52,7 +52,7 @@ v1.1/v2 연구 항목은 [docs/11](docs/11_v2_roadmap.md)에 승인·기각 근�
 
 | 항목 | 결과 | 상태 |
 |---|---|:---:|
-| 자동 회귀 테스트 | 336개 (인과성·등가성·DSP·데이터·복구 게이트) | 통과 |
+| 자동 회귀 테스트 | 352개 (인과성·등가성·DSP·데이터·복구 게이트) | 통과 |
 | 오프라인↔스트리밍 수치 등가성 | 최대 오차 약 `3e-8` | 통과 |
 | PyTorch↔ONNX Runtime 등가성 | 최대 오차 `8e-8` 이하 | 통과 |
 | tiny + ORT CPU P99 | **1.84ms** / 게이트 `<3ms` | 통과 |
@@ -602,31 +602,35 @@ digital/acoustic 모드별 별도 학습이 추가로 필요하다.
 ```
 Deep_ANC/
 ├── configs/              # 모델·데이터·덕트·학습·런타임 설정 (단일 출처)
-│   ├── duct.yaml         #   S(z)/핸드오프/목표대역 — 여기서만 정의한다
-│   ├── model_*.yaml      #   base, tiny, tiny_long, tiny_attn, tiny_long_attn
-│   ├── runtime_tiny.yaml #   배포 후보 실기 설정 (tiny + ORT, lead 109)
+│   ├── duct.yaml         #   실측 P/S 경로·handoff·목표대역 — 여기서만 정의한다
+│   ├── model_*.yaml      #   base, tiny, tiny_long, tiny_attn, tiny_long_attn, tiny_wide
+│   ├── train_finetune.yaml  #  Stage-2 진입 게이트 기준 (readiness 블록)
+│   ├── runtime_tiny.yaml #   배포 후보 실기 설정 (tiny + ORT)
 │   └── elice/            #   GPU 작업 큐 정의
 ├── src/deep_anc/
-│   ├── models/           # HybridANCNet (TCN / GLSTM / MHSA)
+│   ├── models/           # HybridANCNet (TCN / GLSTM / MHSA) + 스트리밍 export
 │   ├── data/             # 합성·recorded 데이터셋, manifest, 전수 QA, P(z) resolver
-│   ├── dsp/              # 동시 인터리브 자극 설계, warp 추적/역보정
+│   ├── dsp/              # S(z) 플랜트, 동시 인터리브 자극, warp 추적, 비선형
 │   ├── losses/           # trusted-band NMSE + MR-STFT + power/clip 정규화
 │   ├── train/            # Trainer, checkpoint, 파인튜닝 readiness 게이트, lock
-│   ├── eval/             # 지표, 플롯, recorded 독립 평가
-│   ├── realtime/         # 3-스레드 런타임, 엔진 4종, SPSC 링버퍼
+│   ├── eval/             # 지표, 플롯, recorded 독립 평가, 측정 산출물 규약
+│   ├── realtime/         # 3-스레드 런타임, 엔진 4종(torch/ort/trt/fxlms), SPSC 링버퍼
 │   └── ops/              # GPU 작업 큐 감독자 (학습 경로와 분리)
 ├── scripts/
-│   ├── elice/            # 부트스트랩, 병렬 학습, 구조 탐색, 작업 큐
+│   ├── elice/            # 부트스트랩(--no-train), 병렬 학습, 구조 탐색, 작업 큐
 │   ├── train/            # 학습, ONNX export, 파인튜닝 진입 감사·파이프라인
-│   ├── eval/             # 오프라인 평가, FxLMS 비교
-│   ├── bench/            # 입력 preflight, 지연·전달맵 측정
+│   ├── eval/             # 오프라인 평가, recorded 독립 평가
+│   ├── bench/            # 입력 preflight, 추론 지연, 클록 드리프트, 레벨·주기 스윕
 │   ├── data/             # 노이즈풀, RIR 뱅크, P/S 측정(ESS·동시 인터리브), 덕트 녹음
 │   ├── demo/             # 세션 평가(OFF→ON→OFF), 청취용 데모 렌더링
-│   ├── docs/             # README 그림 생성 (실측 산출물에서 재생성)
+│   ├── docs/             # README 그림 생성 (실측 산출물·설정에서 재생성)
 │   └── jetson/, export/  # Jetson 유저공간 셋업, TensorRT 엔진 빌드
-├── assets/               # 다이어그램, 이미지, 버전 관리하는 측정 자산
-├── tests/                # 회귀 테스트 336개
-└── docs/                 # 00~11 + FxLMS 부록
+├── assets/
+│   ├── measured/         # 실측 P/S NPZ (primary_path_il, secondary_path_il)
+│   ├── diagrams/         # 아키텍처 그림 6종 + 덕트 3D/측면도
+│   └── images/           # 실기 시연·데이터셋·지연 예산 그림
+├── tests/                # 회귀 테스트 352개
+└── docs/                 # 00~12 + FxLMS 부록
 ```
 
 실행 중 생성되는 `data/`, `runs/`, `results/`, `transfer/`는 `.gitignore`의
@@ -641,6 +645,7 @@ Deep_ANC/
 | 물리·실물 | [지연 물리](docs/01_physics_limits.md) · [하드웨어](docs/02_hardware_setup.md) · [덕트 구조](docs/09_duct_structure.md) |
 | 데이터·모델 | [데이터 파이프라인](docs/03_data_pipeline.md) · [모델 아키텍처](docs/04_model_architecture.md) · [구조 지도](docs/10_structure_map.md) |
 | 학습·배포 | [Elice 학습](docs/05_training_elice.md) · [Jetson 배포](docs/06_deployment_jetson.md) · [개발 절차](docs/08_dev_workflow.md) |
+| **총정리** | **[시스템 총정리](docs/12_system_summary.md)** — 하드웨어·데이터·아키텍처·결과·개선방안 |
 | 평가·연구 | [평가 프로토콜](docs/07_evaluation_protocol.md) · [v2 로드맵](docs/11_v2_roadmap.md) · [FxLMS 부록](docs/appendix_legacy_fxlms.md) |
 
 ---
