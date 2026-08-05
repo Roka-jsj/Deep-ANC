@@ -120,6 +120,16 @@ class OrtEngine:
         return y.astype(np.float32)
 
 
+def _numpy_from_pinned(ptr: int, shape: tuple[int, ...]) -> np.ndarray:
+    """cudaHostAlloc 포인터를 복사 없이 numpy 뷰로 감싼다."""
+
+    import ctypes
+
+    count = int(np.prod(shape))
+    buffer = (ctypes.c_float * count).from_address(int(ptr))
+    return np.ctypeslib.as_array(buffer).reshape(shape)
+
+
 class TrtEngine:
     """TensorRT 10.x FP16 엔진 — 상태 핑퐁 + execute_async_v3 (배포 경로).
 
@@ -152,6 +162,10 @@ class TrtEngine:
         self.hop = int(hop)
         self._trt = trt
         self._cudart = cudart
+        # 동기 대기에서 스레드를 재우면 OS 가 깨워줄 때까지 수 ms 가 날아간다. 실시간
+        # 오디오 콜백에서는 그 지연이 곧 마감 초과다. 스핀 대기로 바꿔 커널 완료를
+        # 즉시 회수한다 — CPU 코어 하나를 태우지만 hop 당 1ms 미만이라 감당된다.
+        cudart.cudaSetDeviceFlags(cudart.cudaDeviceScheduleSpin)
         logger = trt.Logger(trt.Logger.WARNING)
         with open(plan, "rb") as f:
             self.engine = trt.Runtime(logger).deserialize_cuda_engine(f.read())
@@ -186,7 +200,29 @@ class TrtEngine:
                 self.dev[name] = cudart.cudaMalloc(size)[1]
                 self.host[name] = np.zeros(shape, dtype=np.float32)
         self._cur = 0
+
+        # 고정(pinned) 호스트 버퍼. pageable 메모리에서의 cudaMemcpyAsync 는 드라이버가
+        # 내부 스테이징 버퍼를 거치며 사실상 동기 동작이 된다 — 비동기 이득이 사라지고
+        # CUDA Graph 안에도 넣을 수 없다.
+        self._x_nbytes = int(self.host["x"].nbytes)
+        self._y_nbytes = int(self.host["y"].nbytes)
+        self._pin_x_ptr = cudart.cudaHostAlloc(
+            self._x_nbytes, cudart.cudaHostAllocDefault
+        )[1]
+        self._pin_y_ptr = cudart.cudaHostAlloc(
+            self._y_nbytes, cudart.cudaHostAllocDefault
+        )[1]
+        self._pin_x = _numpy_from_pinned(self._pin_x_ptr, self.host["x"].shape)
+        self._pin_y = _numpy_from_pinned(self._pin_y_ptr, self.host["y"].shape)
+        self._pin_x[...] = 0.0
+        self._pin_y[...] = 0.0
+
+        self.graph_exec: list = []
         self.reset()
+        self.graph_captured = self._try_capture_graphs()
+        # 캡처는 상태 버퍼를 워밍업 실행으로 오염시킨다. 반드시 다시 0 으로 되돌린다.
+        self.reset()
+        self._cur = 0
 
     def reset(self) -> None:
         cudart = self._cudart
@@ -200,29 +236,87 @@ class TrtEngine:
                     cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
                 )
 
-    def step(self, ref: np.ndarray, err: np.ndarray) -> np.ndarray:
-        cudart = self._cudart
-        x = np.ascontiguousarray(np.stack([ref, err]).astype(np.float32)[None])
-        cudart.cudaMemcpyAsync(
-            self.dev["x"], x.ctypes.data, x.nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self.stream,
-        )
+    def _bind(self, parity: int) -> None:
+        """상태 A/B 핑퐁 주소를 바인딩한다. 경우의 수는 2 뿐이라 매 스텝 부를 필요가 없다."""
+
         self.context.set_tensor_address("x", self.dev["x"])
         self.context.set_tensor_address("y", self.dev["y"])
-        cur = self._cur
         for name in self.state_names:
             a, b = self.state_dev[name]
-            self.context.set_tensor_address(name, a if cur == 0 else b)
-            self.context.set_tensor_address(f"{name}_out", b if cur == 0 else a)
-        self.context.execute_async_v3(self.stream)
-        y = self.host["y"]
-        cudart.cudaMemcpyAsync(
-            y.ctypes.data, self.dev["y"], y.nbytes,
-            cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self.stream,
-        )
+            self.context.set_tensor_address(name, a if parity == 0 else b)
+            self.context.set_tensor_address(f"{name}_out", b if parity == 0 else a)
+
+    def _try_capture_graphs(self) -> bool:
+        """스텝 전체(H2D → 추론 → D2H)를 parity 별 CUDA Graph 로 캡처한다.
+
+        캡처하지 않으면 매 스텝 커널 수십 개를 개별 런치하게 되고, 커널 하나가 수 µs 인
+        이 모델에서는 **런치 오버헤드가 연산을 압도한다**. trtexec 가 --useCudaGraph 로
+        재는 값과 런타임 값이 크게 벌어졌던 원인이다.
+
+        실패하면 조용히 폴백한다 — 그래프 캡처는 드라이버/TRT 버전에 민감하고, 여기서
+        예외를 올리면 배포 경로 전체가 막힌다.
+        """
+
+        cudart = self._cudart
+        try:
+            self.graph_exec = []
+            for parity in (0, 1):
+                self._bind(parity)
+                # TRT 는 첫 실행에서 내부 workspace 를 잡는다. 캡처 전에 워밍업이 필요하다.
+                self.context.execute_async_v3(self.stream)
+                cudart.cudaStreamSynchronize(self.stream)
+
+                err = cudart.cudaStreamBeginCapture(
+                    self.stream,
+                    cudart.cudaStreamCaptureMode.cudaStreamCaptureModeThreadLocal,
+                )[0]
+                if err != cudart.cudaError_t.cudaSuccess:
+                    return False
+                cudart.cudaMemcpyAsync(
+                    self.dev["x"], self._pin_x_ptr, self._x_nbytes,
+                    cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self.stream,
+                )
+                self.context.execute_async_v3(self.stream)
+                cudart.cudaMemcpyAsync(
+                    self._pin_y_ptr, self.dev["y"], self._y_nbytes,
+                    cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self.stream,
+                )
+                err, graph = cudart.cudaStreamEndCapture(self.stream)
+                if err != cudart.cudaError_t.cudaSuccess:
+                    return False
+                err, exec_ = cudart.cudaGraphInstantiate(graph, 0)
+                if err != cudart.cudaError_t.cudaSuccess:
+                    return False
+                self.graph_exec.append(exec_)
+            return True
+        except Exception:
+            self.graph_exec = []
+            return False
+
+    def step(self, ref: np.ndarray, err: np.ndarray) -> np.ndarray:
+        cudart = self._cudart
+        # 고정(pinned) 버퍼에 직접 쓴다. pageable 메모리의 cudaMemcpyAsync 는 내부적으로
+        # 동기 동작이라 비동기 이득이 사라지고, 매 스텝 배열을 새로 만들면 할당이 핫패스에
+        # 들어온다.
+        self._pin_x[0, 0, :] = ref
+        self._pin_x[0, 1, :] = err
+
+        if self.graph_exec:
+            cudart.cudaGraphLaunch(self.graph_exec[self._cur], self.stream)
+        else:
+            self._bind(self._cur)
+            cudart.cudaMemcpyAsync(
+                self.dev["x"], self._pin_x_ptr, self._x_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyHostToDevice, self.stream,
+            )
+            self.context.execute_async_v3(self.stream)
+            cudart.cudaMemcpyAsync(
+                self._pin_y_ptr, self.dev["y"], self._y_nbytes,
+                cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost, self.stream,
+            )
         cudart.cudaStreamSynchronize(self.stream)
         self._cur ^= 1
-        return y.reshape(-1).copy()
+        return self._pin_y.reshape(-1).copy()
 
 
 class FxLMSEngine:
