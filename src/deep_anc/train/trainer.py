@@ -371,10 +371,25 @@ class Trainer:
             state = load_checkpoint(init_ckpt, self.model, restore_rng=False, map_location="cpu")
             expected_lead = int(cfg["data"].get("digital_reference_lead_samples", 0))
             saved_lead = checkpoint_training_lead(state)
-            if saved_lead != expected_lead:
+            # 허용 오차는 readiness 게이트와 **같은 설정값**을 읽는다. 같은 규칙을 두 곳에
+            # 따로 구현하면 반드시 갈라진다 — 실제로 readiness 만 고쳤다가 여기서 막혔다.
+            # 근거와 유계성은 finetune_readiness.audit_init_checkpoint 주석에 있다.
+            tolerance = int(
+                (cfg.get("readiness", {}) or {}).get(
+                    "max_init_lead_mismatch_samples", 0
+                )
+            )
+            if abs(saved_lead - expected_lead) > tolerance:
                 raise ValueError(
                     "init checkpoint digital-reference lead 불일치: "
-                    f"checkpoint={saved_lead}, training={expected_lead}"
+                    f"checkpoint={saved_lead}, training={expected_lead}, "
+                    f"차이 {abs(saved_lead - expected_lead)} > 허용 {tolerance} samples"
+                )
+            if saved_lead != expected_lead and self.is_main:
+                print(
+                    f"[trainer] init lead {saved_lead} → 학습 {expected_lead} "
+                    f"(차이 {abs(saved_lead - expected_lead)}, 허용 {tolerance}) — "
+                    "surrogate 물리로 학습한 잠정값을 실측값으로 옮긴다"
                 )
             if self.is_main:
                 print(f"[trainer] init_ckpt 로드: {init_ckpt} (step {state.get('step')})")

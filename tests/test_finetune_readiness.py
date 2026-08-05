@@ -585,3 +585,19 @@ def test_gross_lead_mismatch_is_rejected_despite_tolerance(tmp_path):
     check = _check(report, "completed_init_checkpoint")
     assert not check["ok"]
     assert "lead 불일치" in check["message"]
+
+
+def test_trainer_and_gate_share_one_lead_tolerance():
+    """같은 규칙을 두 곳에 구현하면 갈라진다 — 둘 다 같은 설정 키를 읽어야 한다.
+
+    실제로 readiness 만 고쳤다가 trainer 의 별도 검사에서 학습이 막혔다.
+    """
+
+    import inspect
+
+    from deep_anc.train import trainer as trainer_module
+
+    source = inspect.getsource(trainer_module.Trainer.__init__)
+    assert "max_init_lead_mismatch_samples" in source, (
+        "trainer 가 readiness 와 다른 기준으로 init lead 를 검사하고 있다"
+    )
