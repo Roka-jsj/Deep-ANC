@@ -282,7 +282,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.check_only:
             return status.finish("ready", EXIT_OK)
 
-        python = str(Path(sys.executable).resolve())
+        # ``.resolve()`` 를 쓰면 안 된다. venv 의 bin/python 은 시스템 인터프리터를 가리키는
+        # **심볼릭 링크**라, 따라가는 순간 venv 의 site-packages 를 잃고 자식이
+        # "No module named yaml" 로 죽는다. sys.executable 은 이미 절대경로다.
+        python = sys.executable
         override_args = [part for value in args.overrides for part in ("--set", value)]
         ckpt_dir = run_dir / "ckpt"
         best = ckpt_dir / "best.pt"

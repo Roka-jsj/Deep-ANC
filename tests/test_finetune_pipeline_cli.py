@@ -323,3 +323,27 @@ def test_stable_view_drops_volatile_fields():
         "readiness": {"ok": False},
         "steps": [{"name": "train", "returncode": 0}],
     }
+
+
+def test_child_uses_the_running_interpreter_not_its_symlink_target(repo, monkeypatch):
+    """venv 의 bin/python 은 시스템 인터프리터로의 심볼릭 링크다.
+
+    경로를 resolve 하면 링크를 따라가 venv 의 site-packages 를 잃고, 자식이
+    ModuleNotFoundError 로 죽는다. 실제로 원격에서 이렇게 실패했다.
+    """
+
+    captured: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        captured.append(list(command))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    try:
+        pipeline.main([a for a in ARGS if a != "--check-only"])
+    except SystemExit:
+        pass
+    if captured:
+        assert captured[0][0] == sys.executable, (
+            f"자식이 {captured[0][0]} 로 떴다 — sys.executable({sys.executable}) 이어야 한다"
+        )
