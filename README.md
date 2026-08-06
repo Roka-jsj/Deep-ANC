@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="assets/images/gomduri.png" width="150" alt="Deep ANC 마스코트">
 
 # Deep ANC
 
